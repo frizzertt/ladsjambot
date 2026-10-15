@@ -1,0 +1,17 @@
+[Unit]
+Description=LadsJam Last.fm Telegram Now Playing Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/ladsjambot
+ExecStart=/opt/ladsjambot/.venv/bin/python main.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+EnvironmentFile=/opt/ladsjambot/.env
+
+[Install]
+WantedBy=multi-user.target

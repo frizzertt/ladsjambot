@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  bot:
+    build: .
+    container_name: ladsjambot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Persist SQLite database across container rebuilds
+      - ./data:/app/data
+    environment:
+      - DB_PATH=/app/data/bot.db
