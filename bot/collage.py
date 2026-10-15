@@ -9,11 +9,11 @@ from bot.lastfm import TrackInfo
 
 logger = logging.getLogger(__name__)
 
-CELL_SIZE = 500
-INSET = 14
-CARD_RADIUS = 28
-BANNER_HEIGHT = 230
-BG_COLOR = (12, 13, 17, 255)
+CELL_SIZE = 800
+INSET = 10
+CARD_RADIUS = 6
+BANNER_HEIGHT = 340
+BG_COLOR = (13, 13, 14, 255)
 
 # Path to custom bundled Google Fonts
 FONTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "fonts")
@@ -300,46 +300,32 @@ def _draw_card_banner(
     pad_x = int(size * 0.05)
     max_text_w = size - pad_x * 2
 
-    # 2. Listener pill (top-left): equalizer + telegram name on frosted dark plate
-    font_m_user = _get_michroma_font(int(size * 0.033))
-    font_j_user = _get_fallback_font(int(size * 0.036), bold=True)
-    eq_w = int(size * 0.045)
-    pill_h = int(size * 0.088)
-    user_display = _fit_hybrid_text(tg_name, font_m_user, font_j_user, size - pad_x * 2 - eq_w - 40)
+    # 2. Listener tag (top-left): flat dark plate with accent square
+    font_m_user = _get_michroma_font(int(size * 0.028))
+    font_j_user = _get_fallback_font(int(size * 0.034), bold=True)
+    pill_h = int(size * 0.075)
+    user_display = _fit_hybrid_text(tg_name, font_m_user, font_j_user, size - pad_x * 2 - pill_h)
     text_w = _measure_hybrid_text(user_display, font_m_user, font_j_user)
-    pill_w = int(pad_x * 0.5 + eq_w + 10 + text_w + pad_x * 0.5 + 6)
-
-    px, py = pad_x, pad_x
+    px, py = 0, pad_x
+    pill_w = int(pill_h * 0.9 + text_w + pad_x)
     overlay = Image.new("RGBA", card.size, (0, 0, 0, 0))
-    od = ImageDraw.Draw(overlay)
-    od.rounded_rectangle(
-        [(px, py), (px + pill_w, py + pill_h)],
-        radius=pill_h // 2,
-        fill=(8, 9, 14, 175),
-        outline=(255, 255, 255, 38),
-        width=1,
+    ImageDraw.Draw(overlay).rectangle(
+        [(px, py), (px + pill_w + pad_x, py + pill_h)], fill=(10, 10, 11, 215)
     )
     card.alpha_composite(overlay)
-
     draw = ImageDraw.Draw(card)
-    bar_heights = [0.45, 0.85, 0.35, 0.65]
-    bar_w = max(2, eq_w // 7)
-    eq_h = int(pill_h * 0.5)
-    ex = px + int(pad_x * 0.5) + 6
-    ey = py + (pill_h + eq_h) // 2
-    for i, frac in enumerate(bar_heights):
-        bh = max(3, int(eq_h * frac))
-        bx = ex + i * (bar_w + 2)
-        draw.rounded_rectangle(
-            [(bx, ey - bh), (bx + bar_w, ey)], radius=1, fill=(30, 215, 96, 255)
-        )
+    sq = int(pill_h * 0.34)
+    draw.rectangle(
+        [(pad_x, py + (pill_h - sq) // 2), (pad_x + sq, py + (pill_h + sq) // 2)],
+        fill=(227, 74, 42, 255),
+    )
     _draw_hybrid_text(
         draw,
-        (ex + eq_w + 8, py + pill_h // 2),
-        user_display,
+        (pad_x + sq + int(pill_h * 0.4), py + pill_h // 2),
+        user_display.upper() if user_display.isascii() else user_display,
         font_m_user,
         font_j_user,
-        (255, 255, 255, 255),
+        (240, 238, 232, 255),
         anchor="lm",
     )
 
@@ -422,8 +408,8 @@ def _render_single_card(item: TrackInfo, card_size: int, radius: int, banner_h: 
     b_draw.rounded_rectangle(
         [(0, 0), (card_size - 1, card_size - 1)],
         radius=radius,
-        outline=(255, 255, 255, 40),
-        width=2,
+        outline=(255, 255, 255, 22),
+        width=1,
     )
     card.paste(border, (0, 0), border)
 
@@ -462,7 +448,7 @@ def build_collage(items: List[TrackInfo], cell_size: int = CELL_SIZE) -> io.Byte
     canvas_height = rows * cell_size
 
     # Initialize canvas with deep obsidian background
-    canvas = _build_background(items, canvas_width, canvas_height)
+    canvas = Image.new("RGBA", (canvas_width, canvas_height), BG_COLOR)
 
     # Pre-render card drop shadow
     shadow_img, shadow_pad = _create_shadow(card_size, card_radius)
@@ -475,11 +461,6 @@ def build_collage(items: List[TrackInfo], cell_size: int = CELL_SIZE) -> io.Byte
         base_y = row * cell_size + inset
 
         # Paste soft shadow beneath card
-        canvas.paste(
-            shadow_img,
-            (base_x - shadow_pad, base_y - shadow_pad),
-            shadow_img,
-        )
 
         if idx < n:
             card_img = _render_single_card(items[idx], card_size, card_radius, banner_height)

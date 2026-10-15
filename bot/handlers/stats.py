@@ -1,6 +1,7 @@
 import asyncio
 import html
 import logging
+import random
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -10,7 +11,7 @@ from aiogram.types import BufferedInputFile, Message
 
 from bot import stats as st
 from bot.database import Database
-from bot.infographic import render_album_grid, render_rows, render_stats
+from bot.infographic import render_album_grid, render_rows, render_stats, render_versus
 from bot.lastfm import LastFMClient
 
 logger = logging.getLogger(__name__)
@@ -118,7 +119,7 @@ async def cmd_top(message: Message, command: CommandObject, db: Database, lastfm
             (i["name"], i["artist"] if kind == "tracks" else "", i["plays"]) for i in items
         ]
         buf = await asyncio.to_thread(
-            render_rows, KIND_TITLES[kind], subtitle, rows, unit_note="ПРОСЛУШИВАНИЯ"
+            render_rows, KIND_TITLES[kind], subtitle, rows, unit_note="прослушивания"
         )
     await _send_photo(message, buf, name="top.jpg")
 
@@ -148,7 +149,7 @@ async def cmd_leaders(message: Message, command: CommandObject, db: Database, la
         return
     buf = await asyncio.to_thread(
         render_rows, "LEADERBOARD", f"{message.chat.title or 'группа'}  ·  {days} дн.", rows,
-        unit_note="СКРОББЛЫ",
+        unit_note="скробблы", tag="leaderboard",
     )
     await _send_photo(message, buf, name="leaders.jpg")
 
@@ -160,7 +161,7 @@ async def _find_target(message: Message, command: CommandObject, db: Database) -
         u = await db.get_user(reply.from_user.id)
         if u:
             return u
-    arg = (command.args or "").strip().split()
+    arg = [a for a in (command.args or "").split() if not re.fullmatch(r"\d{1,3}d?", a.lower())]
     if arg:
         name = arg[0]
         u = await db.get_user_by_name(name if name.startswith("@") else f"@{name}")
@@ -293,3 +294,203 @@ async def cmd_recent(message: Message, db: Database, lastfm: LastFMClient) -> No
         mark = "▶️" if live else "•"
         lines.append(f"{mark} {html.escape(a or '?')} — {html.escape(t.get('name', '?'))}")
     await message.reply("\n".join(lines), parse_mode="HTML")
+
+
+JUNK_TAGS = {"seen live", "favorites", "favourite", "favorite", "albums i own", "under 2000 listeners"}
+
+
+@router.message(Command("vs"))
+async def cmd_vs(message: Message, command: CommandObject, db: Database, lastfm: LastFMClient) -> None:
+    """/vs @user [days] — head-to-head listening comparison."""
+    me = await _self_user(message, db)
+    if not me:
+        return
+    other = await _find_target(message, command, db)
+    if not other:
+        await message.reply(
+            "Укажите соперника: <code>/vs @username 7</code> или ответьте командой на его сообщение.",
+            parse_mode="HTML",
+        )
+        return
+    days = _parse_days(_args(command), default=7, maximum=30)
+    await message.bot.send_chat_action(message.chat.id, "upload_photo")
+    since = st.since_days(days)
+    (sa, ta), (sb, tb) = await asyncio.gather(
+        st.fetch_scrobbles(lastfm, me["lastfm_user"], since),
+        st.fetch_scrobbles(lastfm, other["lastfm_user"], since),
+    )
+    if sa is None or sb is None:
+        await message.reply(API_ERROR)
+        return
+    a = st.build_stats(me["tg_name"], days, sa, ta)
+    b = st.build_stats(other["tg_name"], days, sb, tb)
+    metrics = [
+        ("скробблы", a.total, b.total),
+        ("минут прослушивания", a.minutes, b.minutes),
+        ("уникальных артистов", a.unique_artists, b.unique_artists),
+        ("уникальных треков", a.unique_tracks, b.unique_tracks),
+        ("активных дней", a.active_days, b.active_days),
+        ("лучший день", a.best_day[1], b.best_day[1]),
+        ("серия дней", a.streak, b.streak),
+    ]
+    buf = await asyncio.to_thread(
+        render_versus, me["tg_name"], other["tg_name"], f"последние {days} дн.", metrics
+    )
+    await _send_photo(message, buf, name="versus.jpg")
+
+
+@router.message(Command("genres", "tags"))
+async def cmd_genres(message: Message, command: CommandObject, db: Database, lastfm: LastFMClient) -> None:
+    """/genres [period] — your top genres, weighted by plays of your top artists."""
+    user = await _self_user(message, db)
+    if not user:
+        return
+    period_key = next((a for a in _args(command) if a in st.PERIODS), "3m")
+    period, label = st.PERIODS[period_key]
+    await message.bot.send_chat_action(message.chat.id, "upload_photo")
+
+    artists = await st.fetch_top(lastfm, user["lastfm_user"], "artists", period, 15)
+    if not artists:
+        await message.reply(API_ERROR if artists is None else "Пока нет данных 🤷")
+        return
+    tag_data = await asyncio.gather(
+        *[lastfm.call("artist.gettoptags", artist=a["name"], autocorrect=1) for a in artists]
+    )
+    score: Dict[str, float] = {}
+    for art, td in zip(artists, tag_data):
+        try:
+            tags = td["toptags"]["tag"][:5]
+        except (TypeError, KeyError):
+            continue
+        for t in tags:
+            name = (t.get("name") or "").lower().strip()
+            if not name or name in JUNK_TAGS or re.fullmatch(r"\d{2,4}s?", name):
+                continue
+            score[name] = score.get(name, 0.0) + art["plays"] * int(t.get("count", 0) or 0) / 100
+    if not score:
+        await message.reply("Не удалось определить жанры 🤷")
+        return
+    top = sorted(score.items(), key=lambda x: x[1], reverse=True)[:10]
+    total = sum(v for _, v in top) or 1
+    rows = [(n.title(), "", max(1, round(100 * v / total))) for n, v in top]
+    buf = await asyncio.to_thread(
+        render_rows, "ЖАНРЫ", f"{user['tg_name']}  ·  {label}", rows, unit_note="доля, %", tag="genres"
+    )
+    await _send_photo(message, buf, name="genres.jpg")
+
+
+@router.message(Command("discover", "recs"))
+async def cmd_discover(message: Message, db: Database, lastfm: LastFMClient) -> None:
+    """/discover — artists similar to your favourites that you haven't listened to much."""
+    user = await _self_user(message, db)
+    if not user:
+        return
+    known = await st.fetch_top(lastfm, user["lastfm_user"], "artists", "overall", 150)
+    if not known:
+        await message.reply(API_ERROR if known is None else "Слишком мало данных 🤷")
+        return
+    known_names = {k["name"].lower() for k in known}
+    seeds = known[:6]
+    sims = await asyncio.gather(
+        *[lastfm.call("artist.getsimilar", artist=s["name"], limit=20, autocorrect=1) for s in seeds]
+    )
+    score: Dict[str, Tuple[float, str]] = {}
+    for seed, d in zip(seeds, sims):
+        try:
+            arts = d["similarartists"]["artist"]
+        except (TypeError, KeyError):
+            continue
+        for a in arts:
+            n = a.get("name", "")
+            if not n or n.lower() in known_names:
+                continue
+            m = float(a.get("match", 0) or 0)
+            prev = score.get(n, (0.0, seed["name"]))
+            score[n] = (prev[0] + m, prev[1] if prev[0] >= m else seed["name"])
+    if not score:
+        await message.reply("Не нашёл новых рекомендаций 🤷")
+        return
+    top = sorted(score.items(), key=lambda x: x[1][0], reverse=True)[:10]
+    lines = ["🧭 <b>Попробуйте послушать</b>\n"]
+    for i, (name, (_, via)) in enumerate(top, 1):
+        lines.append(f"{i}. <b>{html.escape(name)}</b> — похоже на {html.escape(via)}")
+    await message.reply("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(Command("artist"))
+async def cmd_artist(message: Message, command: CommandObject, db: Database, lastfm: LastFMClient) -> None:
+    """/artist <name> — your relationship with an artist plus global info."""
+    user = await _self_user(message, db)
+    if not user:
+        return
+    name = (command.args or "").strip()
+    if not name:
+        await message.reply("Укажите артиста: <code>/artist Radiohead</code>", parse_mode="HTML")
+        return
+    d = await lastfm.call("artist.getinfo", artist=name, username=user["lastfm_user"], autocorrect=1)
+    try:
+        a = d["artist"]
+        stats_ = a.get("stats", {})
+    except (TypeError, KeyError):
+        await message.reply("Артист не найден 🤷")
+        return
+    mine = int(stats_.get("userplaycount", 0) or 0)
+    listeners = int(stats_.get("listeners", 0) or 0)
+    tags = [t["name"] for t in (a.get("tags", {}) or {}).get("tag", [])[:4]]
+    sim = [s["name"] for s in (a.get("similar", {}) or {}).get("artist", [])[:4]]
+    lines = [f"🎤 <b>{html.escape(a.get('name', name))}</b>\n"]
+    lines.append(f"Ваши прослушивания: <b>{mine}</b>  (~{int(mine * st.AVG_TRACK_MINUTES / 60)} ч)")
+    lines.append(f"Слушателей на Last.fm: <b>{listeners:,}</b>".replace(",", " "))
+    if tags:
+        lines.append("Теги: " + ", ".join(html.escape(t) for t in tags))
+    if sim:
+        lines.append("Похожие: " + ", ".join(html.escape(s) for s in sim))
+    await message.reply("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(Command("loved", "likes"))
+async def cmd_loved(message: Message, db: Database, lastfm: LastFMClient) -> None:
+    """/loved — your 10 most recently loved tracks."""
+    user = await _self_user(message, db)
+    if not user:
+        return
+    d = await lastfm.call("user.getlovedtracks", user=user["lastfm_user"], limit=10)
+    try:
+        tracks = d["lovedtracks"]["track"]
+        tracks = [tracks] if isinstance(tracks, dict) else tracks
+    except (TypeError, KeyError):
+        await message.reply(API_ERROR)
+        return
+    if not tracks:
+        await message.reply("Пока нет любимых треков ❤️ — поставьте сердечко на Last.fm.")
+        return
+    lines = ["❤️ <b>Недавно полюбившиеся</b>\n"]
+    for t in tracks[:10]:
+        ar = t.get("artist", {})
+        ar = ar.get("name", "?") if isinstance(ar, dict) else ar
+        lines.append(f"• {html.escape(ar)} — {html.escape(t.get('name', '?'))}")
+    await message.reply("\n".join(lines), parse_mode="HTML")
+
+
+@router.message(Command("roulette", "random"))
+async def cmd_roulette(message: Message, db: Database, lastfm: LastFMClient) -> None:
+    """/roulette — random album from your all-time top, "what to listen to now"."""
+    user = await _self_user(message, db)
+    if not user:
+        return
+    albums = await st.fetch_top(lastfm, user["lastfm_user"], "albums", "overall", 200)
+    if not albums:
+        await message.reply(API_ERROR if albums is None else "Пока нет альбомов 🤷")
+        return
+    pick = random.choice(albums)
+    cover = await lastfm._download_cover(pick["cover"])
+    caption = (
+        f"🎲 <b>{html.escape(pick['name'])}</b>\n{html.escape(pick['artist'])}\n"
+        f"Вы слушали его {pick['plays']} раз(а) — самое время вернуться."
+    )
+    if cover:
+        await message.answer_photo(
+            BufferedInputFile(cover, filename="album.jpg"), caption=caption, parse_mode="HTML"
+        )
+    else:
+        await message.reply(caption, parse_mode="HTML")

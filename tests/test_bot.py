@@ -62,18 +62,18 @@ class BotTestSuite(unittest.IsolatedAsyncioTestCase):
         ]
         buf_1 = build_collage(items_1)
         img_1 = Image.open(buf_1)
-        self.assertEqual(img_1.size, (500, 500))
+        self.assertEqual(img_1.size, (800, 800))
 
-        # Test 2 items -> 2x1 (1000x500)
+        # Test 2 items -> 2x1 (1600x800)
         items_2 = [
             TrackInfo(1, "@user1", "user1", "Artist 1", "Track 1", None),
             TrackInfo(2, "@user2", "user2", "Artist 2", "Track 2", None),
         ]
         buf_2 = build_collage(items_2)
         img_2 = Image.open(buf_2)
-        self.assertEqual(img_2.size, (1000, 500))
+        self.assertEqual(img_2.size, (1600, 800))
 
-        # Test 3 items -> 2x2 (1000x1000) with 1 empty cell
+        # Test 3 items -> 2x2 (1600x1600) with 1 empty cell
         items_3 = [
             TrackInfo(1, "@user1", "user1", "Artist 1", "Track 1", None),
             TrackInfo(2, "@user2", "user2", "Artist 2", "Track 2", None),
@@ -81,7 +81,7 @@ class BotTestSuite(unittest.IsolatedAsyncioTestCase):
         ]
         buf_3 = build_collage(items_3)
         img_3 = Image.open(buf_3)
-        self.assertEqual(img_3.size, (1000, 1000))
+        self.assertEqual(img_3.size, (1600, 1600))
 
         # Test with actual image bytes
         sample_img = Image.new("RGB", (300, 300), (200, 100, 50))
@@ -95,7 +95,7 @@ class BotTestSuite(unittest.IsolatedAsyncioTestCase):
         ]
         buf_cover = build_collage(items_with_cover)
         img_cover = Image.open(buf_cover)
-        self.assertEqual(img_cover.size, (1000, 500))
+        self.assertEqual(img_cover.size, (1600, 800))
 
     def test_placeholder_hash_detection(self):
         placeholder_url = f"https://lastfm.freetls.fastly.net/i/u/300x300/{PLACEHOLDER_HASH}.png"
