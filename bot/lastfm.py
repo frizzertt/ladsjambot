@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 
 # Last.fm default placeholder star image hash
 PLACEHOLDER_HASH = "2a96cbd8b46e442fc41c2b86b821562f"
+COVER_RETRIES = 2
+COVER_CACHE_SIZE = 64
 
 
 @dataclass
@@ -40,6 +42,7 @@ class LastFMClient:
         self.user_agent = user_agent
         self.semaphore = asyncio.Semaphore(semaphore_limit)
         self.api_url = config.LASTFM_API_URL
+        self._cover_cache: Dict[str, bytes] = {}
 
     async def check_user_exists(self, username: str) -> Tuple[bool, Optional[str]]:
         """
@@ -90,27 +93,69 @@ class LastFMClient:
             return False, None
 
     async def _download_cover(self, url: Optional[str]) -> Optional[bytes]:
-        """Download album cover bytes from URL with timeout and placeholder detection."""
-        if not url:
+        """
+        Download album cover bytes with in-memory cache, retries and backoff.
+        Last.fm CDN often fails/timeouts on the first request, so we retry.
+        """
+        if not url or PLACEHOLDER_HASH in url:
             return None
 
-        # Verify against known Last.fm placeholder star hash
-        if PLACEHOLDER_HASH in url:
-            return None
+        cached = self._cover_cache.get(url)
+        if cached:
+            return cached
 
+        headers = {"User-Agent": self.user_agent}
+        timeout = aiohttp.ClientTimeout(total=config.COVER_DOWNLOAD_TIMEOUT)
+        attempts = COVER_RETRIES + 1
+
+        for attempt in range(attempts):
+            try:
+                async with self.session.get(url, headers=headers, timeout=timeout) as resp:
+                    if resp.status == 200:
+                        data = await resp.read()
+                        if len(data) > 0:
+                            if len(self._cover_cache) >= COVER_CACHE_SIZE:
+                                self._cover_cache.pop(next(iter(self._cover_cache)))
+                            self._cover_cache[url] = data
+                            return data
+                    else:
+                        logger.debug("Cover download HTTP %s for %s", resp.status, url)
+                        if resp.status == 404:
+                            return None
+            except Exception as e:
+                logger.debug("Cover download attempt %d failed for %s: %s", attempt + 1, url, e)
+
+            if attempt < attempts - 1:
+                await asyncio.sleep(0.4 * (attempt + 1))
+
+        return None
+
+    async def _fetch_cover_via_track_info(self, artist: str, track: str) -> Optional[str]:
+        """Fallback: ask track.getInfo for the album image when recenttracks has none."""
+        params = {
+            "method": "track.getInfo",
+            "artist": artist,
+            "track": track,
+            "api_key": self.api_key,
+            "format": "json",
+            "autocorrect": "1",
+        }
         try:
-            timeout = aiohttp.ClientTimeout(total=config.COVER_DOWNLOAD_TIMEOUT)
-            headers = {"User-Agent": self.user_agent}
-            async with self.session.get(url, headers=headers, timeout=timeout) as resp:
-                if resp.status == 200:
-                    data = await resp.read()
-                    if len(data) > 0:
-                        return data
-                else:
-                    logger.debug("Cover download returned HTTP %s for %s", resp.status, url)
+            timeout = aiohttp.ClientTimeout(total=config.LASTFM_REQUEST_TIMEOUT * 2)
+            async with self.semaphore:
+                async with self.session.get(
+                    self.api_url, params=params, headers={"User-Agent": self.user_agent}, timeout=timeout
+                ) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json(content_type=None)
+            images = (data.get("track") or {}).get("album", {}).get("image", [])
+            for img in reversed(images if isinstance(images, list) else []):
+                url = (img.get("#text") or "").strip() if isinstance(img, dict) else ""
+                if url and PLACEHOLDER_HASH not in url:
+                    return url
         except Exception as e:
-            logger.debug("Failed to download cover %s: %s", url, e)
-
+            logger.debug("track.getInfo fallback failed for %s - %s: %s", artist, track, e)
         return None
 
     async def get_user_now_playing(self, user_entry: Dict[str, Any]) -> Optional[TrackInfo]:
@@ -219,6 +264,14 @@ class LastFMClient:
 
         # Download cover image if available
         cover_bytes = await self._download_cover(image_url)
+
+        # Fallback: no image in recenttracks or download failed -> try track.getInfo
+        if cover_bytes is None:
+            fallback_url = await self._fetch_cover_via_track_info(
+                artist_name.strip(), track_name.strip()
+            )
+            if fallback_url and fallback_url != image_url:
+                cover_bytes = await self._download_cover(fallback_url)
 
         return TrackInfo(
             tg_id=tg_id,

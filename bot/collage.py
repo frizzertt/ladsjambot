@@ -10,9 +10,9 @@ from bot.lastfm import TrackInfo
 logger = logging.getLogger(__name__)
 
 CELL_SIZE = 500
-INSET = 8
-CARD_RADIUS = 22
-BANNER_HEIGHT = 135
+INSET = 14
+CARD_RADIUS = 28
+BANNER_HEIGHT = 230
 BG_COLOR = (12, 13, 17, 255)
 
 # Path to custom bundled Google Fonts
@@ -192,7 +192,8 @@ def _create_placeholder(size: int) -> Image.Image:
     Generate an authentic dark vinyl record background when no cover art is available.
     """
     card = Image.new("RGBA", (size, size), (20, 22, 29, 255))
-    draw = ImageDraw.Draw(card)
+    grooves = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(grooves)
 
     cx, cy = size // 2, int(size * 0.38)
 
@@ -204,6 +205,9 @@ def _create_placeholder(size: int) -> Image.Image:
             outline=(255, 255, 255, 13),
             width=1,
         )
+
+    card.alpha_composite(grooves)
+    draw = ImageDraw.Draw(card)
 
     # Center vinyl label
     r_label = int(size * 0.11)
@@ -282,48 +286,56 @@ def _draw_card_banner(
     banner_height: int,
 ) -> None:
     """
-    Draw a frosted-glass bottom gradient banner with live equalizer, user handle, and track info
-    using Google Font Michroma with Jura fallback.
+    Draw a bottom gradient with track/artist and a top-left "listener" pill with equalizer.
     """
-    # 1. Smooth exponential alpha gradient fade
+    # 1. Smooth bottom gradient for text legibility
     grad = Image.new("RGBA", (size, banner_height), (0, 0, 0, 0))
     d_grad = ImageDraw.Draw(grad)
     for y in range(banner_height):
         progress = y / float(banner_height)
-        alpha = int(242 * (progress ** 1.35))
-        d_grad.line([(0, y), (size, y)], fill=(8, 10, 15, alpha))
+        alpha = int(235 * (progress ** 1.6))
+        d_grad.line([(0, y), (size, y)], fill=(6, 7, 11, alpha))
     card.paste(grad, (0, size - banner_height), grad)
 
-    draw = ImageDraw.Draw(card)
+    pad_x = int(size * 0.05)
+    max_text_w = size - pad_x * 2
 
-    # 2. Sleek top hairline divider across the banner
-    draw.line(
-        [(0, size - banner_height), (size, size - banner_height)],
-        fill=(255, 255, 255, 26),
+    # 2. Listener pill (top-left): equalizer + telegram name on frosted dark plate
+    font_m_user = _get_michroma_font(int(size * 0.033))
+    font_j_user = _get_fallback_font(int(size * 0.036), bold=True)
+    eq_w = int(size * 0.045)
+    pill_h = int(size * 0.088)
+    user_display = _fit_hybrid_text(tg_name, font_m_user, font_j_user, size - pad_x * 2 - eq_w - 40)
+    text_w = _measure_hybrid_text(user_display, font_m_user, font_j_user)
+    pill_w = int(pad_x * 0.5 + eq_w + 10 + text_w + pad_x * 0.5 + 6)
+
+    px, py = pad_x, pad_x
+    overlay = Image.new("RGBA", card.size, (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    od.rounded_rectangle(
+        [(px, py), (px + pill_w, py + pill_h)],
+        radius=pill_h // 2,
+        fill=(8, 9, 14, 175),
+        outline=(255, 255, 255, 38),
+        width=1,
     )
+    card.alpha_composite(overlay)
 
-    pad_x = int(size * 0.046)
-
-    # 3. Mini Animated Equalizer bars in vibrant Spotify Green
-    eq_x = pad_x
-    eq_y = size - int(banner_height * 0.76)
-    bar_heights = [12, 22, 10, 18]
-    for i, h in enumerate(bar_heights):
-        bx = eq_x + i * 6
+    draw = ImageDraw.Draw(card)
+    bar_heights = [0.45, 0.85, 0.35, 0.65]
+    bar_w = max(2, eq_w // 7)
+    eq_h = int(pill_h * 0.5)
+    ex = px + int(pad_x * 0.5) + 6
+    ey = py + (pill_h + eq_h) // 2
+    for i, frac in enumerate(bar_heights):
+        bh = max(3, int(eq_h * frac))
+        bx = ex + i * (bar_w + 2)
         draw.rounded_rectangle(
-            [(bx, eq_y + (22 - h)), (bx + 3, eq_y + 22)],
-            radius=2,
-            fill=(30, 215, 96, 255),
+            [(bx, ey - bh), (bx + bar_w, ey)], radius=1, fill=(30, 215, 96, 255)
         )
-
-    # 4. Telegram user handle with Michroma
-    font_m_user = _get_michroma_font(int(size * 0.038))
-    font_j_user = _get_fallback_font(int(size * 0.038), bold=True)
-    max_user_w = size - pad_x * 2 - 38
-    user_display = _fit_hybrid_text(tg_name, font_m_user, font_j_user, max_user_w)
     _draw_hybrid_text(
         draw,
-        (eq_x + 32, eq_y + 11),
+        (ex + eq_w + 8, py + pill_h // 2),
         user_display,
         font_m_user,
         font_j_user,
@@ -331,34 +343,50 @@ def _draw_card_banner(
         anchor="lm",
     )
 
-    # 5. Track title with Michroma
-    font_m_track = _get_michroma_font(int(size * 0.034))
-    font_j_track = _get_fallback_font(int(size * 0.034), bold=True)
-    max_text_w = size - pad_x * 2
+    # 3. Track title (large) and artist (muted)
+    font_m_track = _get_michroma_font(int(size * 0.047))
+    font_j_track = _get_fallback_font(int(size * 0.052), bold=True)
     track_display = _fit_hybrid_text(track, font_m_track, font_j_track, max_text_w)
     _draw_hybrid_text(
         draw,
-        (pad_x, size - int(banner_height * 0.42)),
+        (pad_x, size - int(size * 0.115)),
         track_display,
         font_m_track,
         font_j_track,
-        (245, 247, 255, 255),
+        (255, 255, 255, 255),
         anchor="lm",
     )
 
-    # 6. Artist name with Michroma
-    font_m_artist = _get_michroma_font(int(size * 0.029))
-    font_j_artist = _get_fallback_font(int(size * 0.029), bold=False)
+    font_m_artist = _get_michroma_font(int(size * 0.032))
+    font_j_artist = _get_fallback_font(int(size * 0.036))
     artist_display = _fit_hybrid_text(artist, font_m_artist, font_j_artist, max_text_w)
     _draw_hybrid_text(
         draw,
-        (pad_x, size - int(banner_height * 0.19)),
+        (pad_x, size - int(size * 0.052)),
         artist_display,
         font_m_artist,
         font_j_artist,
-        (165, 172, 192, 255),
+        (186, 192, 212, 255),
         anchor="lm",
     )
+
+
+def _build_background(items: List[TrackInfo], width: int, height: int) -> Image.Image:
+    """Blurred, darkened cover art as ambient canvas background (falls back to flat color)."""
+    for item in items:
+        if not item.cover_bytes:
+            continue
+        try:
+            with Image.open(io.BytesIO(item.cover_bytes)) as im:
+                bg = im.convert("RGB")
+            bg = bg.resize((64, 64), Image.Resampling.BILINEAR)
+            bg = bg.resize((width, height), Image.Resampling.BICUBIC)
+            bg = bg.filter(ImageFilter.GaussianBlur(max(width, height) // 12))
+            dark = Image.new("RGB", (width, height), (10, 11, 16))
+            return Image.blend(bg, dark, 0.78).convert("RGBA")
+        except Exception:
+            continue
+    return Image.new("RGBA", (width, height), BG_COLOR)
 
 
 def _render_single_card(item: TrackInfo, card_size: int, radius: int, banner_h: int) -> Image.Image:
@@ -434,7 +462,7 @@ def build_collage(items: List[TrackInfo], cell_size: int = CELL_SIZE) -> io.Byte
     canvas_height = rows * cell_size
 
     # Initialize canvas with deep obsidian background
-    canvas = Image.new("RGBA", (canvas_width, canvas_height), BG_COLOR)
+    canvas = _build_background(items, canvas_width, canvas_height)
 
     # Pre-render card drop shadow
     shadow_img, shadow_pad = _create_shadow(card_size, card_radius)

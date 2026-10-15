@@ -18,7 +18,7 @@ class Config:
     )
     LASTFM_RATE_LIMIT_SEMAPHORE: int = 4
     LASTFM_REQUEST_TIMEOUT: float = 3.0
-    COVER_DOWNLOAD_TIMEOUT: float = 4.0
+    COVER_DOWNLOAD_TIMEOUT: float = 6.0
 
 
 config = Config()
