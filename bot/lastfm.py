@@ -94,6 +94,40 @@ class LastFMClient:
             logger.error("Exception checking Last.fm user %s: %s", username, e)
             return False, None
 
+    async def call(self, method: str, retries: int = 2, **params: Any) -> Optional[Dict[str, Any]]:
+        """
+        Generic read-only Last.fm API call with retries on transient failures.
+        Returns the decoded JSON dict (may contain an "error" key) or None on network failure.
+        """
+        query: Dict[str, str] = {
+            "method": method,
+            "api_key": self.api_key,
+            "format": "json",
+        }
+        query.update({k: str(v) for k, v in params.items() if v is not None})
+        headers = {"User-Agent": self.user_agent}
+        timeout = aiohttp.ClientTimeout(total=config.LASTFM_REQUEST_TIMEOUT * 2)
+
+        for attempt in range(retries + 1):
+            try:
+                async with self.semaphore:
+                    async with self.session.get(
+                        self.api_url, params=query, headers=headers, timeout=timeout
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json(content_type=None)
+                            if isinstance(data, dict):
+                                if data.get("error") in TRANSIENT_LASTFM_ERRORS:
+                                    raise RuntimeError(f"transient Last.fm error {data['error']}")
+                                return data
+                        elif resp.status < 500 and resp.status != 429:
+                            return None
+            except Exception as e:
+                logger.debug("Last.fm %s attempt %d failed: %r", method, attempt + 1, e)
+            if attempt < retries:
+                await asyncio.sleep(0.5 * (attempt + 1))
+        return None
+
     async def _download_cover(self, url: Optional[str]) -> Optional[bytes]:
         """
         Download album cover bytes with in-memory cache, retries and backoff.

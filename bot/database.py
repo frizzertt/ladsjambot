@@ -91,6 +91,17 @@ class Database:
             row = await cursor.fetchone()
             return dict(row) if row else None
 
+    async def get_user_by_name(self, tg_name: str) -> Optional[Dict[str, Any]]:
+        """Retrieve user info by Telegram @username (case-insensitive)."""
+        assert self._conn is not None
+        query = (
+            "SELECT tg_id, tg_name, lastfm_user FROM users "
+            "WHERE LOWER(tg_name) = LOWER(?) LIMIT 1;"
+        )
+        async with self._conn.execute(query, (tg_name,)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
     async def is_user_registered(self, tg_id: int) -> bool:
         """Check if user is registered in the database."""
         assert self._conn is not None

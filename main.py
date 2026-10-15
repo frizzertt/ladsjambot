@@ -5,10 +5,11 @@ import aiohttp
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import BotCommand
 
 from bot.config import config, validate_config
 from bot.database import Database
-from bot.handlers import group_router, private_router
+from bot.handlers import group_router, private_router, stats_router
 from bot.lastfm import LastFMClient
 from bot.middlewares import GroupMemberTrackerMiddleware
 
@@ -61,8 +62,25 @@ async def main() -> None:
     dp.message.outer_middleware(GroupMemberTrackerMiddleware(db=db))
 
     # Register Routers
+    dp.include_router(stats_router)
     dp.include_router(private_router)
     dp.include_router(group_router)
+
+    try:
+        await bot.set_my_commands(
+            [
+                BotCommand(command="np", description="Коллаж: что слушают сейчас"),
+                BotCommand(command="stats", description="Моя статистика за N дней"),
+                BotCommand(command="top", description="Мои топы: альбомы/артисты/треки"),
+                BotCommand(command="leaders", description="Лидеры группы по скробблам"),
+                BotCommand(command="compat", description="Музыкальная совместимость"),
+                BotCommand(command="whoknows", description="Кто в группе слушает артиста"),
+                BotCommand(command="join", description="Привязаться к группе"),
+                BotCommand(command="help", description="Справка"),
+            ]
+        )
+    except Exception as e:
+        logger.warning("Could not set bot commands: %s", e)
 
     logger.info("Bot starting polling...")
     try:

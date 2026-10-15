@@ -16,6 +16,8 @@ class Config:
         "USER_AGENT",
         "NowPlayingTelegramBot/1.0 (aiohttp; +https://github.com/showwhatimlistening)"
     )
+    # Timezone offset (hours from UTC) used for day/hour bucketing in /stats
+    TZ_OFFSET_HOURS: float = float(os.getenv("TZ_OFFSET_HOURS", "3"))
     LASTFM_RATE_LIMIT_SEMAPHORE: int = 4
     LASTFM_REQUEST_TIMEOUT: float = 6.0
     COVER_DOWNLOAD_TIMEOUT: float = 6.0

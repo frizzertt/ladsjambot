@@ -108,3 +108,28 @@ class BotTestSuite(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StatsTestSuite(unittest.TestCase):
+    def test_build_and_render_stats(self):
+        import time
+        from bot import stats as st
+        from bot.infographic import render_stats, render_rows
+
+        now = int(time.time())
+        sc = [{"ts": now - i * 3600, "artist": f"A{i % 3}", "track": f"T{i % 5}"} for i in range(60)]
+        data = st.build_stats("@u", 3, sc)
+        self.assertEqual(data.total, 60)
+        self.assertEqual(len(data.per_day), 3)
+        self.assertEqual(sum(data.per_hour), 60)
+        self.assertGreater(len(render_stats(data).getvalue()), 1000)
+        self.assertGreater(len(render_rows("T", "s", [("a", "", 3)]).getvalue()), 1000)
+
+    def test_compatibility(self):
+        from bot.stats import compatibility
+
+        a = [{"name": "X", "plays": 10}, {"name": "Y", "plays": 5}]
+        score, shared = compatibility(a, a)
+        self.assertEqual(score, 100)
+        self.assertEqual(len(shared), 2)
+        self.assertEqual(compatibility(a, [{"name": "Z", "plays": 3}])[0], 0)
