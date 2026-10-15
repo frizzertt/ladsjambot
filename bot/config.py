@@ -17,7 +17,7 @@ class Config:
         "NowPlayingTelegramBot/1.0 (aiohttp; +https://github.com/showwhatimlistening)"
     )
     LASTFM_RATE_LIMIT_SEMAPHORE: int = 4
-    LASTFM_REQUEST_TIMEOUT: float = 3.0
+    LASTFM_REQUEST_TIMEOUT: float = 6.0
     COVER_DOWNLOAD_TIMEOUT: float = 6.0
 
 

@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 # Last.fm default placeholder star image hash
 PLACEHOLDER_HASH = "2a96cbd8b46e442fc41c2b86b821562f"
 COVER_RETRIES = 2
+RECENT_TRACKS_RETRIES = 2
+TRANSIENT_LASTFM_ERRORS = (8, 11, 16, "8", "11", "16")
 COVER_CACHE_SIZE = 64
 
 
@@ -177,32 +179,39 @@ class LastFMClient:
         headers = {"User-Agent": self.user_agent}
         timeout = aiohttp.ClientTimeout(total=config.LASTFM_REQUEST_TIMEOUT)
 
-        try:
-            async with self.semaphore:
-                async with self.session.get(
-                    self.api_url, params=params, headers=headers, timeout=timeout
-                ) as resp:
-                    if resp.status != 200:
-                        logger.warning(
-                            "Last.fm getrecenttracks returned HTTP %s for user %s",
-                            resp.status,
-                            lastfm_user,
-                        )
-                        return None
-
-                    data = await resp.json(content_type=None)
-        except Exception as e:
-            logger.warning("Error fetching recent tracks for %s: %s", lastfm_user, e)
-            return None
-
-        if not isinstance(data, dict) or "error" in data:
-            if isinstance(data, dict) and "error" in data:
-                logger.debug(
-                    "Last.fm error code %s for user %s: %s",
-                    data.get("error"),
+        # Transient failures (timeout, 5xx, Last.fm error 8/11/16) must not look like
+        # "nobody is listening", so retry a few times before giving up.
+        data = None
+        for attempt in range(RECENT_TRACKS_RETRIES + 1):
+            try:
+                async with self.semaphore:
+                    async with self.session.get(
+                        self.api_url, params=params, headers=headers, timeout=timeout
+                    ) as resp:
+                        if resp.status == 200:
+                            candidate = await resp.json(content_type=None)
+                            err = candidate.get("error") if isinstance(candidate, dict) else None
+                            if err not in TRANSIENT_LASTFM_ERRORS:
+                                data = candidate
+                                break
+                        elif resp.status < 500 and resp.status != 429:
+                            logger.warning(
+                                "Last.fm getrecenttracks returned HTTP %s for user %s",
+                                resp.status,
+                                lastfm_user,
+                            )
+                            return None
+            except Exception as e:
+                logger.warning(
+                    "Attempt %d fetching recent tracks for %s failed: %r",
+                    attempt + 1,
                     lastfm_user,
-                    data.get("message"),
+                    e,
                 )
+            if attempt < RECENT_TRACKS_RETRIES:
+                await asyncio.sleep(0.5 * (attempt + 1))
+
+        if data is None:
             return None
 
         # Parse recenttracks payload
