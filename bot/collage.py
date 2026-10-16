@@ -5,6 +5,8 @@ import os
 from typing import List, Optional, Tuple
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
+from bot import fonts as _mw
+from bot.fonts import font as _mfont
 from bot.lastfm import TrackInfo
 
 logger = logging.getLogger(__name__)
@@ -22,7 +24,11 @@ JURA_PATH = os.path.join(FONTS_DIR, "Jura.ttf")
 
 
 def _get_michroma_font(size: int) -> ImageFont.ImageFont:
-    """Load Google Font Michroma or fallback to default."""
+    """Heavy display face (Montserrat ExtraBold)."""
+    return _mfont(size, _mw.EXTRABOLD)
+
+
+def _legacy_michroma(size: int) -> ImageFont.ImageFont:
     if os.path.exists(MICHROMA_PATH):
         try:
             return ImageFont.truetype(MICHROMA_PATH, size)
@@ -33,9 +39,11 @@ def _get_michroma_font(size: int) -> ImageFont.ImageFont:
 
 
 def _get_fallback_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
-    """
-    Find and return Jura (Eurostile/techno Cyrillic font) or system TrueType fallback.
-    """
+    """Body face (Montserrat Bold / SemiBold)."""
+    return _mfont(size, _mw.BOLD if bold else _mw.SEMIBOLD)
+
+
+def _legacy_fallback(size: int, bold: bool = False) -> ImageFont.ImageFont:
     if os.path.exists(JURA_PATH):
         try:
             return ImageFont.truetype(JURA_PATH, size)
@@ -187,93 +195,60 @@ def _create_shadow(card_size: int, radius: int) -> Tuple[Image.Image, int]:
     return shadow.filter(ImageFilter.GaussianBlur(blur // 2)), blur
 
 
+def _dominant(img: Image.Image) -> Tuple[int, int, int]:
+    """Vivid dominant colour of an image (saturation-boosted average)."""
+    from PIL import ImageEnhance
+
+    small = img.convert("RGB").resize((24, 24), Image.Resampling.BILINEAR)
+    small = ImageEnhance.Color(small).enhance(1.9)
+    r, g, b = small.resize((1, 1), Image.Resampling.BOX).getpixel((0, 0))
+    m = max(r, g, b, 1)
+    k = 235 / m  # normalise brightness so chips pop on dark photos
+    return (min(255, int(r * k)), min(255, int(g * k)), min(255, int(b * k)))
+
+
 def _create_placeholder(size: int) -> Image.Image:
-    """
-    Generate an authentic dark vinyl record background when no cover art is available.
-    """
-    card = Image.new("RGBA", (size, size), (20, 22, 29, 255))
-    grooves = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(grooves)
-
+    """Vivid gradient + vinyl rings when no cover art is available."""
+    card = Image.new("RGBA", (size, size), (30, 24, 60, 255))
+    px = card.load()
+    for y in range(size):
+        for x in range(0, size, 4):
+            t = (x + y) / (2.0 * size)
+            c = (int(70 + 150 * t), int(40 + 20 * t), int(190 - 80 * t), 255)
+            for dx in range(4):
+                if x + dx < size:
+                    px[x + dx, y] = c
+    d = ImageDraw.Draw(card)
     cx, cy = size // 2, int(size * 0.38)
-
-    # Concentric vinyl grooves
-    max_groove = int(size * 0.44)
-    for r in range(40, max_groove, 20):
-        draw.ellipse(
-            [cx - r, cy - r, cx + r, cy + r],
-            outline=(255, 255, 255, 13),
-            width=1,
-        )
-
-    card.alpha_composite(grooves)
-    draw = ImageDraw.Draw(card)
-
-    # Center vinyl label
-    r_label = int(size * 0.11)
-    draw.ellipse(
-        [cx - r_label, cy - r_label, cx + r_label, cy + r_label],
-        fill=(32, 35, 48, 255),
-        outline=(99, 102, 241, 150),
-        width=2,
-    )
-
-    # Music note icon in center of record
-    font_note = _get_fallback_font(int(size * 0.088), bold=True)
-    draw.text((cx, cy), "♫", fill=(225, 230, 255, 255), font=font_note, anchor="mm")
-
+    for r in range(30, int(size * 0.42), 26):
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=(255, 255, 255, 40), width=2)
+    d.text((cx, cy), "♫", fill=(255, 255, 255, 255), font=_mw.symbol_font(int(size * 0.2)), anchor="mm")
     return card
 
 
-def _create_empty_slot(size: int, radius: int) -> Image.Image:
-    """
-    Generate an elegant dark ghost card for unused slots in the dynamic grid.
-    """
-    card = Image.new("RGBA", (size, size), (16, 17, 23, 255))
+def _create_empty_slot(size: int, radius: int, item: Optional[TrackInfo] = None) -> Image.Image:
+    """Filler tile: tinted, blurred cover of someone else's track instead of a blank slot."""
+    card = None
+    if item is not None and item.cover_bytes:
+        try:
+            with Image.open(io.BytesIO(item.cover_bytes)) as im:
+                im = im.convert("RGB")
+                m = min(im.size)
+                im = im.crop(((im.width - m) // 2, (im.height - m) // 2,
+                              (im.width + m) // 2, (im.height + m) // 2))
+                card = im.resize((size, size), Image.Resampling.LANCZOS).filter(
+                    ImageFilter.GaussianBlur(size // 28)
+                )
+                card = Image.blend(card, Image.new("RGB", card.size, (12, 12, 18)), 0.45).convert("RGBA")
+        except Exception:
+            card = None
+    if card is None:
+        card = _create_placeholder(size)
     draw = ImageDraw.Draw(card)
-
-    # Subtle rounded border
-    draw.rounded_rectangle(
-        [(2, 2), (size - 3, size - 3)],
-        radius=radius,
-        outline=(36, 40, 54, 255),
-        width=2,
-    )
-
-    font_icon = _get_fallback_font(int(size * 0.08))
-    font_m_title = _get_michroma_font(int(size * 0.034))
-    font_j_title = _get_fallback_font(int(size * 0.034), bold=True)
-    font_m_sub = _get_michroma_font(int(size * 0.026))
-    font_j_sub = _get_fallback_font(int(size * 0.026))
-
-    cy = size // 2 - 18
-    draw.text((size // 2, cy), "🎧", fill=(90, 95, 115, 255), font=font_icon, anchor="mm")
-
-    # Centered hybrid text
-    title_text = "Свободное место"
-    title_w = _measure_hybrid_text(title_text, font_m_title, font_j_title)
-    _draw_hybrid_text(
-        draw,
-        (int(size // 2 - title_w // 2), cy + 42),
-        title_text,
-        font_m_title,
-        font_j_title,
-        (130, 135, 155, 255),
-        anchor="lm",
-    )
-
-    sub_text = "Ожидание трека на Last.fm"
-    sub_w = _measure_hybrid_text(sub_text, font_m_sub, font_j_sub)
-    _draw_hybrid_text(
-        draw,
-        (int(size // 2 - sub_w // 2), cy + 68),
-        sub_text,
-        font_m_sub,
-        font_j_sub,
-        (85, 90, 110, 255),
-        anchor="lm",
-    )
-
+    draw.text((size // 2, size // 2), "♫", fill=(255, 255, 255, 150),
+              font=_mw.symbol_font(int(size * 0.22)), anchor="mm")
+    f = _mfont(int(size * 0.05), _mw.BOLD)
+    draw.text((size // 2, int(size * 0.68)), "СВОБОДНО", fill=(255, 255, 255, 170), font=f, anchor="mm")
     return _round_corners(card, radius)
 
 
@@ -284,77 +259,54 @@ def _draw_card_banner(
     artist: str,
     size: int,
     banner_height: int,
+    accent: Tuple[int, int, int] = (255, 90, 60),
 ) -> None:
-    """
-    Draw a bottom gradient with track/artist and a top-left "listener" pill with equalizer.
-    """
-    # 1. Smooth bottom gradient for text legibility
+    """Big, heavy type over a strong gradient + colourful listener chip (phone-first sizes)."""
+    banner_height = int(banner_height * 1.25)
     grad = Image.new("RGBA", (size, banner_height), (0, 0, 0, 0))
     d_grad = ImageDraw.Draw(grad)
     for y in range(banner_height):
         progress = y / float(banner_height)
-        alpha = int(235 * (progress ** 1.6))
-        d_grad.line([(0, y), (size, y)], fill=(6, 7, 11, alpha))
+        d_grad.line([(0, y), (size, y)], fill=(4, 4, 8, int(245 * (progress ** 1.25))))
     card.paste(grad, (0, size - banner_height), grad)
 
-    pad_x = int(size * 0.05)
-    max_text_w = size - pad_x * 2
-
-    # 2. Listener tag (top-left): flat dark plate with accent square
-    font_m_user = _get_michroma_font(int(size * 0.028))
-    font_j_user = _get_fallback_font(int(size * 0.034), bold=True)
-    pill_h = int(size * 0.075)
-    user_display = _fit_hybrid_text(tg_name, font_m_user, font_j_user, size - pad_x * 2 - pill_h)
-    text_w = _measure_hybrid_text(user_display, font_m_user, font_j_user)
-    px, py = 0, pad_x
-    pill_w = int(pill_h * 0.9 + text_w + pad_x)
-    overlay = Image.new("RGBA", card.size, (0, 0, 0, 0))
-    ImageDraw.Draw(overlay).rectangle(
-        [(px, py), (px + pill_w + pad_x, py + pill_h)], fill=(10, 10, 11, 215)
-    )
-    card.alpha_composite(overlay)
+    pad = int(size * 0.05)
+    max_w = size - pad * 2
     draw = ImageDraw.Draw(card)
-    sq = int(pill_h * 0.34)
-    draw.rectangle(
-        [(pad_x, py + (pill_h - sq) // 2), (pad_x + sq, py + (pill_h + sq) // 2)],
-        fill=(227, 74, 42, 255),
-    )
-    _draw_hybrid_text(
-        draw,
-        (pad_x + sq + int(pill_h * 0.4), py + pill_h // 2),
-        user_display.upper() if user_display.isascii() else user_display,
-        font_m_user,
-        font_j_user,
-        (240, 238, 232, 255),
-        anchor="lm",
-    )
 
-    # 3. Track title (large) and artist (muted)
-    font_m_track = _get_michroma_font(int(size * 0.047))
-    font_j_track = _get_fallback_font(int(size * 0.052), bold=True)
-    track_display = _fit_hybrid_text(track, font_m_track, font_j_track, max_text_w)
-    _draw_hybrid_text(
-        draw,
-        (pad_x, size - int(size * 0.115)),
-        track_display,
-        font_m_track,
-        font_j_track,
-        (255, 255, 255, 255),
-        anchor="lm",
-    )
+    # listener chip (top-left): accent-coloured, dark bold text
+    f_user = _mfont(int(size * 0.052), _mw.EXTRABOLD)
+    chip_h = int(size * 0.1)
+    name = _fit_hybrid_text(tg_name, f_user, f_user, size - pad * 3)
+    tw = f_user.getlength(name)
+    chip_w = int(tw + chip_h * 0.9)
+    draw.rounded_rectangle([(pad, pad), (pad + chip_w, pad + chip_h)], radius=chip_h // 2, fill=accent + (255,))
+    draw.text((pad + chip_h * 0.45, pad + chip_h / 2), name, font=f_user, fill=(12, 12, 16, 255), anchor="lm")
 
-    font_m_artist = _get_michroma_font(int(size * 0.032))
-    font_j_artist = _get_fallback_font(int(size * 0.036))
-    artist_display = _fit_hybrid_text(artist, font_m_artist, font_j_artist, max_text_w)
-    _draw_hybrid_text(
-        draw,
-        (pad_x, size - int(size * 0.052)),
-        artist_display,
-        font_m_artist,
-        font_j_artist,
-        (186, 192, 212, 255),
-        anchor="lm",
-    )
+    # artist (accent colour) and track (white, up to 2 lines)
+    f_artist = _mfont(int(size * 0.056), _mw.BOLD)
+    f_track = _mfont(int(size * 0.088), _mw.EXTRABOLD)
+    artist_d = _fit_hybrid_text(artist, f_artist, f_artist, max_w)
+    y_artist = size - pad - int(size * 0.02)
+    draw.text((pad, y_artist), artist_d, font=f_artist, fill=accent + (255,), anchor="ls")
+
+    words, lines, cur = track.split(), [], ""
+    for w in words:
+        t = (cur + " " + w).strip()
+        if f_track.getlength(t) <= max_w or not cur:
+            cur = t
+        else:
+            lines.append(cur)
+            cur = w
+    lines.append(cur)
+    if len(lines) > 2:
+        lines = [lines[0], " ".join(lines[1:])]
+    lines = [_fit_hybrid_text(ln, f_track, f_track, max_w) for ln in lines]
+    lh = int(size * 0.1)
+    y = y_artist - int(size * 0.075) - lh * (len(lines) - 1)
+    for ln in lines:
+        draw.text((pad, y), ln, font=f_track, fill=(255, 255, 255, 255), anchor="ls")
+        y += lh
 
 
 def _build_background(items: List[TrackInfo], width: int, height: int) -> Image.Image:
@@ -396,8 +348,8 @@ def _render_single_card(item: TrackInfo, card_size: int, radius: int, banner_h: 
     if card is None:
         card = _create_placeholder(card_size)
 
-    # Draw bottom glassmorphism banner with Michroma typography
-    _draw_card_banner(card, item.tg_name, item.track, item.artist, card_size, banner_h)
+    accent = _dominant(card)
+    _draw_card_banner(card, item.tg_name, item.track, item.artist, card_size, banner_h, accent)
 
     # Clip with rounded corners
     card = _round_corners(card, radius)
@@ -408,8 +360,8 @@ def _render_single_card(item: TrackInfo, card_size: int, radius: int, banner_h: 
     b_draw.rounded_rectangle(
         [(0, 0), (card_size - 1, card_size - 1)],
         radius=radius,
-        outline=(255, 255, 255, 22),
-        width=1,
+        outline=(255, 255, 255, 40),
+        width=2,
     )
     card.paste(border, (0, 0), border)
 
@@ -465,7 +417,7 @@ def build_collage(items: List[TrackInfo], cell_size: int = CELL_SIZE) -> io.Byte
         if idx < n:
             card_img = _render_single_card(items[idx], card_size, card_radius, banner_height)
         else:
-            card_img = _create_empty_slot(card_size, card_radius)
+            card_img = _create_empty_slot(card_size, card_radius, items[(idx - n) % n])
 
         canvas.paste(card_img, (base_x, base_y), card_img)
 

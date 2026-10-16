@@ -60,6 +60,17 @@ async def _self_user(message: Message, db: Database) -> Optional[Dict[str, Any]]
     return user
 
 
+async def _hero_covers(lastfm: LastFMClient, user: str, period: str = "1month", n: int = 12):
+    """Album covers of a user's top albums for the poster hero (best effort, never raises)."""
+    try:
+        albums = await st.fetch_top(lastfm, user, "albums", period, n)
+        urls = [a["cover"] for a in (albums or []) if a.get("cover")]
+        got = await asyncio.gather(*[lastfm._download_cover(u) for u in urls])
+        return [c for c in got if c]
+    except Exception:
+        return []
+
+
 async def _send_photo(message: Message, buf, caption: str = "", name: str = "stats.jpg") -> None:
     await message.answer_photo(
         photo=BufferedInputFile(buf.getvalue(), filename=name),
@@ -86,7 +97,8 @@ async def cmd_stats(message: Message, command: CommandObject, db: Database, last
         return
 
     data = st.build_stats(user["tg_name"], days, scrobbles, truncated)
-    buf = await asyncio.to_thread(render_stats, data)
+    covers = await _hero_covers(lastfm, user["lastfm_user"], "7day" if days <= 7 else "1month")
+    buf = await asyncio.to_thread(render_stats, data, covers)
     await _send_photo(message, buf, name="listening_stats.jpg")
 
 
@@ -118,8 +130,9 @@ async def cmd_top(message: Message, command: CommandObject, db: Database, lastfm
         rows = [
             (i["name"], i["artist"] if kind == "tracks" else "", i["plays"]) for i in items
         ]
+        covers = await _hero_covers(lastfm, user["lastfm_user"], period)
         buf = await asyncio.to_thread(
-            render_rows, KIND_TITLES[kind], subtitle, rows, unit_note="прослушивания"
+            render_rows, KIND_TITLES[kind], subtitle, rows, unit_note="прослушивания", covers=covers
         )
     await _send_photo(message, buf, name="top.jpg")
 
@@ -334,7 +347,9 @@ async def cmd_vs(message: Message, command: CommandObject, db: Database, lastfm:
         ("серия дней", a.streak, b.streak),
     ]
     buf = await asyncio.to_thread(
-        render_versus, me["tg_name"], other["tg_name"], f"последние {days} дн.", metrics
+        render_versus, me["tg_name"], other["tg_name"], f"последние {days} дн.", metrics,
+        (await _hero_covers(lastfm, me["lastfm_user"], "1month", 6))
+        + (await _hero_covers(lastfm, other["lastfm_user"], "1month", 6))
     )
     await _send_photo(message, buf, name="versus.jpg")
 
@@ -373,8 +388,10 @@ async def cmd_genres(message: Message, command: CommandObject, db: Database, las
     top = sorted(score.items(), key=lambda x: x[1], reverse=True)[:10]
     total = sum(v for _, v in top) or 1
     rows = [(n.title(), "", max(1, round(100 * v / total))) for n, v in top]
+    covers = await _hero_covers(lastfm, user["lastfm_user"], period)
     buf = await asyncio.to_thread(
-        render_rows, "ЖАНРЫ", f"{user['tg_name']}  ·  {label}", rows, unit_note="доля, %", tag="genres"
+        render_rows, "ЖАНРЫ", f"{user['tg_name']}  ·  {label}", rows, unit_note="доля, %", tag="genres",
+        covers=covers
     )
     await _send_photo(message, buf, name="genres.jpg")
 
