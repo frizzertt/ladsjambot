@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 import aiohttp
@@ -15,6 +16,7 @@ COVER_RETRIES = 2
 RECENT_TRACKS_RETRIES = 2
 TRANSIENT_LASTFM_ERRORS = (8, 11, 16, "8", "11", "16")
 COVER_CACHE_SIZE = 64
+RECENT_SCROBBLE_WINDOW = 240  # seconds a just-scrobbled track still counts as playing
 
 
 @dataclass
@@ -270,10 +272,20 @@ class LastFMClient:
         if not isinstance(first_track, dict):
             return None
 
-        # Track is active ONLY if nowplaying == "true"
+        # Track is active if flagged nowplaying, or if it was scrobbled moments ago.
+        # Last.fm drops the nowplaying flag as soon as the scrobble is committed
+        # (and some scrobblers never send it), so a freshly scrobbled track is
+        # almost certainly still playing.
         attr = first_track.get("@attr")
-        if not isinstance(attr, dict) or attr.get("nowplaying") != "true":
-            return None
+        is_now = isinstance(attr, dict) and attr.get("nowplaying") == "true"
+        if not is_now:
+            date = first_track.get("date")
+            try:
+                age = time.time() - int(date["uts"])
+            except (TypeError, KeyError, ValueError):
+                return None
+            if age > RECENT_SCROBBLE_WINDOW:
+                return None
 
         # Extract artist name
         artist_raw = first_track.get("artist")

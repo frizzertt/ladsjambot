@@ -115,7 +115,11 @@ async def cmd_now_playing(
 
     # Edge Case: Nobody is currently listening to music
     if not active_tracks:
-        await message.reply("Сейчас никто ничего не слушает")
+        names = ", ".join(html.escape(m["tg_name"]) for m in members)
+        await message.reply(
+            f"Сейчас никто ничего не слушает\n<i>Проверены: {names}</i>",
+            parse_mode="HTML",
+        )
         return
 
     # 3. Non-blocking image generation in thread pool
@@ -136,6 +140,11 @@ async def cmd_now_playing(
         lines.append(f"<b>{user_display}</b>: {artist_display} — {track_display}")
 
     full_text = header + "\n".join(lines)
+
+    active_ids = {item.tg_id for item in active_tracks}
+    idle = [html.escape(m["tg_name"]) for m in members if m["tg_id"] not in active_ids]
+    if idle:
+        full_text += "\n\n<i>Не слушают: " + ", ".join(idle) + "</i>"
 
     # 5. Send photo collage to group
     photo_file = BufferedInputFile(
