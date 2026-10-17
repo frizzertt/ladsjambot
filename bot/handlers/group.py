@@ -115,7 +115,7 @@ async def cmd_now_playing(
 
     # Edge Case: Nobody is currently listening to music
     if not active_tracks:
-        names = ", ".join(html.escape(m["tg_name"]) for m in members)
+        names = ", ".join(html.escape(m["tg_name"].lstrip("@")) for m in members)
         await message.reply(
             f"Сейчас никто ничего не слушает\n<i>Проверены: {names}</i>",
             parse_mode="HTML",
@@ -134,7 +134,7 @@ async def cmd_now_playing(
     header = "🎧 <b>Сейчас слушают:</b>\n\n"
     lines = []
     for item in active_tracks:
-        user_display = html.escape(item.tg_name)
+        user_display = html.escape(item.tg_name.lstrip("@"))
         artist_display = html.escape(item.artist)
         track_display = html.escape(item.track)
         lines.append(f"<b>{user_display}</b>: {artist_display} — {track_display}")
@@ -142,7 +142,7 @@ async def cmd_now_playing(
     full_text = header + "\n".join(lines)
 
     active_ids = {item.tg_id for item in active_tracks}
-    idle = [html.escape(m["tg_name"]) for m in members if m["tg_id"] not in active_ids]
+    idle = [html.escape(m["tg_name"].lstrip("@")) for m in members if m["tg_id"] not in active_ids]
     if idle:
         full_text += "\n\n<i>Не слушают: " + ", ".join(idle) + "</i>"
 
