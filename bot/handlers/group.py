@@ -7,6 +7,7 @@ from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboar
 
 from bot.collage import build_collage
 from bot.database import Database
+from bot.formatting import user_name_html
 from bot.lastfm import LastFMClient
 
 logger = logging.getLogger(__name__)
@@ -35,8 +36,8 @@ async def cmd_join(message: Message, db: Database) -> None:
     )
 
     if is_registered:
-        await message.reply(
-            f"✅ <b>{html.escape(tg_name)}</b>, вы успешно привязаны к этой группе!\n"
+        await message.answer(
+            f"✅ <b>{user_name_html(tg_name)}</b>, вы успешно привязаны к этой группе!\n"
             "Теперь ваши текущие треки будут отображаться при вызове <code>/np</code>.",
             parse_mode="HTML",
         )
@@ -53,7 +54,7 @@ async def cmd_join(message: Message, db: Database) -> None:
                 ]
             ]
         )
-        await message.reply(
+        await message.answer(
             "❌ Вы ещё не привязали свой аккаунт Last.fm.\n\n"
             "Нажмите кнопку ниже, чтобы войти через официальный сайт Last.fm:",
             reply_markup=kb,
@@ -101,7 +102,7 @@ async def cmd_now_playing(
                 ]
             ]
         )
-        await message.reply(
+        await message.answer(
             "Никто не привязал аккаунт. Напишите мне в ЛС /reg <ник> или нажмите кнопку ниже:",
             reply_markup=kb,
         )
@@ -115,8 +116,8 @@ async def cmd_now_playing(
 
     # Edge Case: Nobody is currently listening to music
     if not active_tracks:
-        names = ", ".join(html.escape(m["tg_name"]) for m in members)
-        await message.reply(
+        names = ", ".join(user_name_html(m["tg_name"]) for m in members)
+        await message.answer(
             f"Сейчас никто ничего не слушает\n<i>Проверены: {names}</i>",
             parse_mode="HTML",
         )
@@ -127,14 +128,14 @@ async def cmd_now_playing(
         collage_buf = await asyncio.to_thread(build_collage, active_tracks)
     except Exception as e:
         logger.error("Failed to generate collage: %s", e)
-        await message.reply("⚠️ Произошла ошибка при генерации коллажа.")
+        await message.answer("⚠️ Произошла ошибка при генерации коллажа.")
         return
 
     # 4. Construct caption list: "Юзер: Артист — Трек"
     header = "🎧 <b>Сейчас слушают:</b>\n\n"
     lines = []
     for item in active_tracks:
-        user_display = html.escape(item.tg_name)
+        user_display = user_name_html(item.tg_name)
         artist_display = html.escape(item.artist)
         track_display = html.escape(item.track)
         lines.append(f"<b>{user_display}</b>: {artist_display} — {track_display}")
@@ -142,7 +143,7 @@ async def cmd_now_playing(
     full_text = header + "\n".join(lines)
 
     active_ids = {item.tg_id for item in active_tracks}
-    idle = [html.escape(m["tg_name"]) for m in members if m["tg_id"] not in active_ids]
+    idle = [user_name_html(m["tg_name"]) for m in members if m["tg_id"] not in active_ids]
     if idle:
         full_text += "\n\n<i>Не слушают: " + ", ".join(idle) + "</i>"
 

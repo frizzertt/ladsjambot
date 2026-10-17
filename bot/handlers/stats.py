@@ -11,6 +11,7 @@ from aiogram.types import BufferedInputFile, Message
 
 from bot import stats as st
 from bot.database import Database
+from bot.formatting import user_name_html
 from bot.infographic import render_album_grid, render_rows, render_stats, render_versus
 from bot.lastfm import LastFMClient
 
@@ -36,7 +37,7 @@ def _display_name(message: Message) -> str:
     u = message.from_user
     if not u:
         return "?"
-    return f"@{u.username}" if u.username else u.full_name
+    return u.username or u.full_name.replace("@", "")
 
 
 def _args(command: CommandObject) -> List[str]:
@@ -56,7 +57,7 @@ async def _self_user(message: Message, db: Database) -> Optional[Dict[str, Any]]
         return None
     user = await db.get_user(message.from_user.id)
     if not user:
-        await message.reply(NOT_REGISTERED, parse_mode="HTML")
+        await message.answer(NOT_REGISTERED, parse_mode="HTML")
     return user
 
 
@@ -90,10 +91,10 @@ async def cmd_stats(message: Message, command: CommandObject, db: Database, last
 
     scrobbles, truncated = await st.fetch_scrobbles(lastfm, user["lastfm_user"], st.since_days(days))
     if scrobbles is None:
-        await message.reply(API_ERROR)
+        await message.answer(API_ERROR)
         return
     if not scrobbles:
-        await message.reply(f"За последние {days} дн. скробблов нет 🤷")
+        await message.answer(f"За последние {days} дн. скробблов нет 🤷")
         return
 
     data = st.build_stats(user["tg_name"], days, scrobbles, truncated)
@@ -116,10 +117,10 @@ async def cmd_top(message: Message, command: CommandObject, db: Database, lastfm
 
     items = await st.fetch_top(lastfm, user["lastfm_user"], kind, period, 9 if kind == "albums" else 10)
     if items is None:
-        await message.reply(API_ERROR)
+        await message.answer(API_ERROR)
         return
     if not items:
-        await message.reply("Пока нет данных за этот период 🤷")
+        await message.answer("Пока нет данных за этот период 🤷")
         return
 
     subtitle = f"{user['tg_name']}  ·  {period_label}"
@@ -141,12 +142,12 @@ async def cmd_top(message: Message, command: CommandObject, db: Database, lastfm
 async def cmd_leaders(message: Message, command: CommandObject, db: Database, lastfm: LastFMClient) -> None:
     """/leaders [N] — group leaderboard by scrobbles over the last N days (default 7)."""
     if message.chat.type not in ("group", "supergroup"):
-        await message.reply("Эта команда работает только в группе.")
+        await message.answer("Эта команда работает только в группе.")
         return
     days = _parse_days(_args(command), default=7, maximum=90)
     members = await db.get_group_members(message.chat.id)
     if not members:
-        await message.reply("В группе пока никто не привязал Last.fm. Используйте /join.")
+        await message.answer("В группе пока никто не привязал Last.fm. Используйте /join.")
         return
     await message.bot.send_chat_action(message.chat.id, "upload_photo")
 
@@ -158,7 +159,7 @@ async def cmd_leaders(message: Message, command: CommandObject, db: Database, la
         reverse=True,
     )
     if not rows:
-        await message.reply(f"За последние {days} дн. ни у кого нет скробблов 🤷")
+        await message.answer(f"За последние {days} дн. ни у кого нет скробблов 🤷")
         return
     buf = await asyncio.to_thread(
         render_rows, "LEADERBOARD", f"{message.chat.title or 'группа'}  ·  {days} дн.", rows,
@@ -195,7 +196,7 @@ async def cmd_compat(message: Message, command: CommandObject, db: Database, las
         return
     other = await _find_target(message, command, db)
     if not other:
-        await message.reply(
+        await message.answer(
             "Укажите пользователя: <code>/compat @username</code> или ответьте командой на его сообщение.",
             parse_mode="HTML",
         )
@@ -206,10 +207,10 @@ async def cmd_compat(message: Message, command: CommandObject, db: Database, las
         st.fetch_top(lastfm, other["lastfm_user"], "artists", "6month", 100),
     )
     if a is None or b is None:
-        await message.reply(API_ERROR)
+        await message.answer(API_ERROR)
         return
     if not a or not b:
-        await message.reply("Недостаточно данных за последние 6 месяцев 🤷")
+        await message.answer("Недостаточно данных за последние 6 месяцев 🤷")
         return
 
     score, shared = st.compatibility(a, b)
@@ -223,32 +224,32 @@ async def cmd_compat(message: Message, command: CommandObject, db: Database, las
     )
     lines = [
         f"🧬 <b>Совместимость</b>\n"
-        f"{html.escape(me['tg_name'])} × {html.escape(other['tg_name'])}\n\n"
+        f"{user_name_html(me['tg_name'])} × {user_name_html(other['tg_name'])}\n\n"
         f"{bar}  <b>{score}%</b> — {verdict}"
     ]
     if shared:
         lines.append("\n<b>Общие артисты:</b>")
         for name, pa, pb in shared[:6]:
             lines.append(f"• {html.escape(name)} — {pa} / {pb}")
-    await message.reply("\n".join(lines), parse_mode="HTML")
+    await message.answer("\n".join(lines), parse_mode="HTML")
 
 
 @router.message(Command("whoknows", "wk"))
 async def cmd_whoknows(message: Message, command: CommandObject, db: Database, lastfm: LastFMClient) -> None:
     """/whoknows [artist] — who in the group listens to this artist the most."""
     if message.chat.type not in ("group", "supergroup"):
-        await message.reply("Эта команда работает только в группе.")
+        await message.answer("Эта команда работает только в группе.")
         return
     members = await db.get_group_members(message.chat.id)
     if not members:
-        await message.reply("В группе пока никто не привязал Last.fm. Используйте /join.")
+        await message.answer("В группе пока никто не привязал Last.fm. Используйте /join.")
         return
 
     artist = (command.args or "").strip()
     if not artist:
         me = await db.get_user(message.from_user.id) if message.from_user else None
         if not me:
-            await message.reply(NOT_REGISTERED, parse_mode="HTML")
+            await message.answer(NOT_REGISTERED, parse_mode="HTML")
             return
         recent = await lastfm.call("user.getrecenttracks", user=me["lastfm_user"], limit=1)
         try:
@@ -259,7 +260,7 @@ async def cmd_whoknows(message: Message, command: CommandObject, db: Database, l
         except (TypeError, KeyError, IndexError):
             artist = ""
         if not artist:
-            await message.reply("Укажите артиста: <code>/whoknows Radiohead</code>", parse_mode="HTML")
+            await message.answer("Укажите артиста: <code>/whoknows Radiohead</code>", parse_mode="HTML")
             return
 
     async def one(m: Dict[str, Any]) -> Tuple[str, int, str]:
@@ -276,14 +277,14 @@ async def cmd_whoknows(message: Message, command: CommandObject, db: Database, l
     canonical = next((r[2] for r in results if r[2]), artist)
     ranked = sorted((r for r in results if r[1] > 0), key=lambda r: r[1], reverse=True)
     if not ranked:
-        await message.reply(f"Никто в группе не слушал <b>{html.escape(canonical)}</b> 🤷", parse_mode="HTML")
+        await message.answer(f"Никто в группе не слушал <b>{html.escape(canonical)}</b> 🤷", parse_mode="HTML")
         return
 
     lines = [f"🎤 <b>Кто знает {html.escape(canonical)}</b>\n"]
     for i, (name, plays, _) in enumerate(ranked[:10]):
         medal = MEDALS[i] if i < 3 else f"{i + 1}."
-        lines.append(f"{medal} {html.escape(name)} — <b>{plays}</b>")
-    await message.reply("\n".join(lines), parse_mode="HTML")
+        lines.append(f"{medal} {user_name_html(name)} — <b>{plays}</b>")
+    await message.answer("\n".join(lines), parse_mode="HTML")
 
 
 @router.message(Command("recent"))
@@ -297,7 +298,7 @@ async def cmd_recent(message: Message, db: Database, lastfm: LastFMClient) -> No
         tracks = data["recenttracks"]["track"]
         tracks = [tracks] if isinstance(tracks, dict) else tracks
     except (TypeError, KeyError):
-        await message.reply(API_ERROR)
+        await message.answer(API_ERROR)
         return
     lines = ["🕘 <b>Последние треки</b>\n"]
     for t in tracks[:10]:
@@ -306,7 +307,7 @@ async def cmd_recent(message: Message, db: Database, lastfm: LastFMClient) -> No
         live = (t.get("@attr") or {}).get("nowplaying") == "true"
         mark = "▶️" if live else "•"
         lines.append(f"{mark} {html.escape(a or '?')} — {html.escape(t.get('name', '?'))}")
-    await message.reply("\n".join(lines), parse_mode="HTML")
+    await message.answer("\n".join(lines), parse_mode="HTML")
 
 
 JUNK_TAGS = {"seen live", "favorites", "favourite", "favorite", "albums i own", "under 2000 listeners"}
@@ -320,7 +321,7 @@ async def cmd_vs(message: Message, command: CommandObject, db: Database, lastfm:
         return
     other = await _find_target(message, command, db)
     if not other:
-        await message.reply(
+        await message.answer(
             "Укажите соперника: <code>/vs @username 7</code> или ответьте командой на его сообщение.",
             parse_mode="HTML",
         )
@@ -333,7 +334,7 @@ async def cmd_vs(message: Message, command: CommandObject, db: Database, lastfm:
         st.fetch_scrobbles(lastfm, other["lastfm_user"], since),
     )
     if sa is None or sb is None:
-        await message.reply(API_ERROR)
+        await message.answer(API_ERROR)
         return
     a = st.build_stats(me["tg_name"], days, sa, ta)
     b = st.build_stats(other["tg_name"], days, sb, tb)
@@ -366,7 +367,7 @@ async def cmd_genres(message: Message, command: CommandObject, db: Database, las
 
     artists = await st.fetch_top(lastfm, user["lastfm_user"], "artists", period, 15)
     if not artists:
-        await message.reply(API_ERROR if artists is None else "Пока нет данных 🤷")
+        await message.answer(API_ERROR if artists is None else "Пока нет данных 🤷")
         return
     tag_data = await asyncio.gather(
         *[lastfm.call("artist.gettoptags", artist=a["name"], autocorrect=1) for a in artists]
@@ -383,7 +384,7 @@ async def cmd_genres(message: Message, command: CommandObject, db: Database, las
                 continue
             score[name] = score.get(name, 0.0) + art["plays"] * int(t.get("count", 0) or 0) / 100
     if not score:
-        await message.reply("Не удалось определить жанры 🤷")
+        await message.answer("Не удалось определить жанры 🤷")
         return
     top = sorted(score.items(), key=lambda x: x[1], reverse=True)[:10]
     total = sum(v for _, v in top) or 1
@@ -404,7 +405,7 @@ async def cmd_discover(message: Message, db: Database, lastfm: LastFMClient) -> 
         return
     known = await st.fetch_top(lastfm, user["lastfm_user"], "artists", "overall", 150)
     if not known:
-        await message.reply(API_ERROR if known is None else "Слишком мало данных 🤷")
+        await message.answer(API_ERROR if known is None else "Слишком мало данных 🤷")
         return
     known_names = {k["name"].lower() for k in known}
     seeds = known[:6]
@@ -425,13 +426,13 @@ async def cmd_discover(message: Message, db: Database, lastfm: LastFMClient) -> 
             prev = score.get(n, (0.0, seed["name"]))
             score[n] = (prev[0] + m, prev[1] if prev[0] >= m else seed["name"])
     if not score:
-        await message.reply("Не нашёл новых рекомендаций 🤷")
+        await message.answer("Не нашёл новых рекомендаций 🤷")
         return
     top = sorted(score.items(), key=lambda x: x[1][0], reverse=True)[:10]
     lines = ["🧭 <b>Попробуйте послушать</b>\n"]
     for i, (name, (_, via)) in enumerate(top, 1):
         lines.append(f"{i}. <b>{html.escape(name)}</b> — похоже на {html.escape(via)}")
-    await message.reply("\n".join(lines), parse_mode="HTML")
+    await message.answer("\n".join(lines), parse_mode="HTML")
 
 
 @router.message(Command("artist"))
@@ -442,14 +443,14 @@ async def cmd_artist(message: Message, command: CommandObject, db: Database, las
         return
     name = (command.args or "").strip()
     if not name:
-        await message.reply("Укажите артиста: <code>/artist Radiohead</code>", parse_mode="HTML")
+        await message.answer("Укажите артиста: <code>/artist Radiohead</code>", parse_mode="HTML")
         return
     d = await lastfm.call("artist.getinfo", artist=name, username=user["lastfm_user"], autocorrect=1)
     try:
         a = d["artist"]
         stats_ = a.get("stats", {})
     except (TypeError, KeyError):
-        await message.reply("Артист не найден 🤷")
+        await message.answer("Артист не найден 🤷")
         return
     mine = int(stats_.get("userplaycount", 0) or 0)
     listeners = int(stats_.get("listeners", 0) or 0)
@@ -462,7 +463,7 @@ async def cmd_artist(message: Message, command: CommandObject, db: Database, las
         lines.append("Теги: " + ", ".join(html.escape(t) for t in tags))
     if sim:
         lines.append("Похожие: " + ", ".join(html.escape(s) for s in sim))
-    await message.reply("\n".join(lines), parse_mode="HTML")
+    await message.answer("\n".join(lines), parse_mode="HTML")
 
 
 @router.message(Command("loved", "likes"))
@@ -476,17 +477,17 @@ async def cmd_loved(message: Message, db: Database, lastfm: LastFMClient) -> Non
         tracks = d["lovedtracks"]["track"]
         tracks = [tracks] if isinstance(tracks, dict) else tracks
     except (TypeError, KeyError):
-        await message.reply(API_ERROR)
+        await message.answer(API_ERROR)
         return
     if not tracks:
-        await message.reply("Пока нет любимых треков ❤️ — поставьте сердечко на Last.fm.")
+        await message.answer("Пока нет любимых треков ❤️ — поставьте сердечко на Last.fm.")
         return
     lines = ["❤️ <b>Недавно полюбившиеся</b>\n"]
     for t in tracks[:10]:
         ar = t.get("artist", {})
         ar = ar.get("name", "?") if isinstance(ar, dict) else ar
         lines.append(f"• {html.escape(ar)} — {html.escape(t.get('name', '?'))}")
-    await message.reply("\n".join(lines), parse_mode="HTML")
+    await message.answer("\n".join(lines), parse_mode="HTML")
 
 
 @router.message(Command("roulette", "random"))
@@ -497,7 +498,7 @@ async def cmd_roulette(message: Message, db: Database, lastfm: LastFMClient) -> 
         return
     albums = await st.fetch_top(lastfm, user["lastfm_user"], "albums", "overall", 200)
     if not albums:
-        await message.reply(API_ERROR if albums is None else "Пока нет альбомов 🤷")
+        await message.answer(API_ERROR if albums is None else "Пока нет альбомов 🤷")
         return
     pick = random.choice(albums)
     cover = await lastfm._download_cover(pick["cover"])
@@ -510,4 +511,4 @@ async def cmd_roulette(message: Message, db: Database, lastfm: LastFMClient) -> 
             BufferedInputFile(cover, filename="album.jpg"), caption=caption, parse_mode="HTML"
         )
     else:
-        await message.reply(caption, parse_mode="HTML")
+        await message.answer(caption, parse_mode="HTML")
