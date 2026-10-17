@@ -218,8 +218,8 @@ def _kpis(sh: Sheet, y: int, items: Sequence[Tuple[str, str]]) -> int:
 
 
 def _bars(sh: Sheet, y: int, h: int, values: Sequence[int], labels: Sequence[str],
-          show_values: bool, label_every: int = 1) -> int:
-    x0, x1 = PAD, W - PAD
+          show_values: bool, label_every: int = 1, *, x0: float = PAD,
+          x1: float = W - PAD, label_size: int = 24) -> int:
     sh.rrect(x0 - 12, y, x1 + 12, y + h, 36, fill=CARD)
     top, bottom = y + 60, y + h - 56
     vmax = max(max(values, default=0), 1)
@@ -238,7 +238,7 @@ def _bars(sh: Sheet, y: int, h: int, values: Sequence[int], labels: Sequence[str
         else:
             sh.rrect(cx - bw / 2, bottom - 6, cx + bw / 2, bottom, 3, fill=LINE)
         if i % label_every == 0:
-            sh.text(cx, bottom + 30, labels[i], 24, MUTED, fonts.SEMIBOLD, align="m")
+            sh.text(cx, bottom + 30, labels[i], label_size, MUTED, fonts.SEMIBOLD, align="m")
     return y + h
 
 
@@ -278,14 +278,38 @@ def _rows_h(n: int, sub: bool) -> int:
 
 
 # ---- public renderers --------------------------------------------------------
+def _stats_ranking(sh: Sheet, x: int, y: int, width: int, title: str, rows: Sequence[Row]) -> int:
+    """Half-width ranking panel for the compact listening report."""
+    height = 80 + max(len(rows), 1) * 92 + 16
+    sh.rrect(x, y, x + width, y + height, 28, fill=CARD)
+    sh.text(x + 24, y + 38, title, 28, INK, fonts.BLACK, max_w=width - 48)
+    vmax = max((row[2] for row in rows), default=1) or 1
+    if not rows:
+        sh.text(x + 24, y + 112, "Пока нет данных", 26, MUTED)
+    for i, (label, sub, val) in enumerate(rows):
+        ry = y + 80 + i * 92
+        col = sh.pal[i % len(sh.pal)]
+        sh.text(x + 24, ry + 25, str(i + 1), 26, col, fonts.BLACK)
+        value = f"{val:,}".replace(",", " ")
+        vw = sh.measure(value, 28, fonts.BLACK)
+        sh.text(x + width - 24, ry + 25, value, 28, col, fonts.BLACK, align="r")
+        sh.text(x + 58, ry + 25, label, 28, INK, fonts.EXTRABOLD, max_w=width - 106 - vw)
+        if sub:
+            sh.text(x + 58, ry + 55, sub, 23, MUTED, fonts.SEMIBOLD, max_w=width - 82)
+        bw = max(6, (width - 82) * val / vmax)
+        sh.rrect(x + 58, ry + 74, x + 58 + bw, ry + 79, 2, fill=col)
+    return y + height
+
+
 def render_stats(st: ListeningStats, covers: Sequence[Optional[bytes]] = ()) -> io.BytesIO:
-    n_a, n_t = len(st.top_artists), len(st.top_tracks)
-    hero_h = 520
-    height = (hero_h + 36) + 20 + 2 * 210 + 40 + (88 + 380) + 40 + (88 + 340) + 40 \
-        + (88 + _rows_h(n_a, False)) + 40 + (88 + _rows_h(n_t, True)) + 40 + 70
+    hero_h = 280
+    charts_y = hero_h + 36 + 20 + 2 * 210 + 24
+    ranks_y = charts_y + 390
+    rank_h = 80 + max(len(st.top_artists), len(st.top_tracks), 1) * 92 + 16
+    height = ranks_y + rank_h + 100
     sh = Sheet(height, _palette(covers))
     y = _hero(sh, covers, st.name.upper(), f"последние {st.days} дн.", "listening report", hero_h)
-    y = _kpis(
+    _kpis(
         sh, y + 20,
         [
             (f"{st.total:,}".replace(",", " "), "количество прослушиваний"),
@@ -293,22 +317,26 @@ def render_stats(st: ListeningStats, covers: Sequence[Optional[bytes]] = ()) -> 
             (str(st.unique_artists), "артистов"),
             (f"{st.streak} дн.", "серия"),
         ],
-    ) + 40
+    )
 
+    gap = 32
+    panel_w = (W - 2 * PAD - gap) // 2
+    right_x = PAD + panel_w + gap
+    sh.text(PAD, charts_y + 20, "ПО ДНЯМ", 30, INK, fonts.BLACK)
+    sh.text(right_x, charts_y + 20, "ПО ЧАСАМ", 30, INK, fonts.BLACK)
     n = len(st.per_day)
-    y = _section(sh, y, "1", "по дням", f"рекорд {st.best_day[1]} · {st.best_day[0]}")
-    y = _bars(sh, y, 380, [v for _, v in st.per_day], [l for l, _ in st.per_day],
-              show_values=n <= 10, label_every=1 if n <= 8 else (2 if n <= 16 else 5)) + 40
-
+    _bars(sh, charts_y + 60, 270, [v for _, v in st.per_day], [l for l, _ in st.per_day],
+          show_values=n <= 7, label_every=max(1, math.ceil(n / 5)),
+          x0=PAD, x1=PAD + panel_w, label_size=20)
+    _bars(sh, charts_y + 60, 270, st.per_hour, [f"{h:02d}" for h in range(24)], False, 4,
+          x0=right_x, x1=W - PAD, label_size=20)
+    sh.text(PAD, charts_y + 354, f"Рекорд: {st.best_day[1]} · {st.best_day[0]}", 23, MUTED,
+            max_w=panel_w)
     peak = max(range(24), key=lambda h: st.per_hour[h]) if st.total else 0
-    y = _section(sh, y, "2", "по часам", f"пик {peak:02d}:00")
-    y = _bars(sh, y, 340, st.per_hour, [f"{h:02d}" for h in range(24)], False, 4) + 40
-
-    y = _section(sh, y, "3", "топ артистов")
-    y = _rank_list(sh, y, st.top_artists) + 40
-    y = _section(sh, y, "4", "топ треков")
-    y = _rank_list(sh, y, st.top_tracks)
-    _footer(sh, y + 24, "выборка ограничена" if st.truncated else "")
+    sh.text(right_x, charts_y + 354, f"Пик активности: {peak:02d}:00", 23, MUTED)
+    _stats_ranking(sh, PAD, ranks_y, panel_w, "ТОП АРТИСТОВ", st.top_artists)
+    _stats_ranking(sh, right_x, ranks_y, panel_w, "ТОП ТРЕКОВ", st.top_tracks)
+    _footer(sh, ranks_y + rank_h + 24, "выборка ограничена" if st.truncated else "")
     return sh.export()
 
 
@@ -332,22 +360,23 @@ def render_album_grid(
     items = list(items)[:9]
     covers = list(covers)
     n = len(items)
-    cols = 2 if n > 1 else 1
+    cols = 3 if n >= 5 else 2 if n > 1 else 1
     rows = math.ceil(n / cols)
     gap = 24
-    size = (W - 2 * PAD - gap * (cols - 1)) // cols
-    cap_h = 140
+    size = min(600, (W - 2 * PAD - gap * (cols - 1)) // cols)
+    grid_x = (W - (cols * size + (cols - 1) * gap)) // 2
+    cap_h = 104
     cell_h = size + cap_h
-    hero_h = 460
+    hero_h = 280
     height = hero_h + 36 + 20 + rows * cell_h + 100
     sh = Sheet(height, _palette(covers))
     y0 = _hero(sh, covers, title, subtitle, "top albums", hero_h) + 20
     for i, it in enumerate(items):
         r, c = divmod(i, cols)
-        x = PAD + c * (size + gap)
+        x = grid_x + c * (size + gap)
         y = y0 + r * cell_h
         col = sh.pal[i % len(sh.pal)]
-        im = _open(covers[i]) or Image.new("RGB", (size, size), CARD)
+        im = _open(covers[i] if i < len(covers) else None) or Image.new("RGB", (size, size), CARD)
         sh.paste(im, x, y, size=size, radius=32)
         sh.rrect(x + 16, y + 16, x + 16 + 76, y + 16 + 76, 38, fill=col)
         sh.text(x + 54, y + 54, f"{i + 1}", 36, (12, 12, 16), fonts.BLACK, align="m")
@@ -355,8 +384,8 @@ def render_album_grid(
         pw = sh.measure(pl, 30, fonts.BLACK) + 40
         sh.rrect(x + size - 16 - pw, y + size - 76, x + size - 16, y + size - 16, 30, fill=(12, 12, 16))
         sh.text(x + size - 16 - pw / 2, y + size - 46, pl, 30, col, fonts.BLACK, align="m")
-        sh.text(x + 4, y + size + 36, it["name"], 32, INK, fonts.EXTRABOLD, max_w=size - 8)
-        sh.text(x + 4, y + size + 80, it["artist"], 28, MUTED, fonts.SEMIBOLD, max_w=size - 8)
+        sh.text(x + 4, y + size + 30, it["name"], 28, INK, fonts.EXTRABOLD, max_w=size - 8)
+        sh.text(x + 4, y + size + 66, it["artist"], 24, MUTED, fonts.SEMIBOLD, max_w=size - 8)
     _footer(sh, y0 + rows * cell_h + 10)
     return sh.export()
 
