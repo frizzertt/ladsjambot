@@ -153,7 +153,7 @@ async def cmd_leaders(message: Message, command: CommandObject, db: Database, la
     since = st.since_days(days)
     counts = await asyncio.gather(*[st.count_scrobbles(lastfm, m["lastfm_user"], since) for m in members])
     rows = sorted(
-        ((m["tg_name"], f"last.fm/{m['lastfm_user']}", c) for m, c in zip(members, counts) if c),
+        ((m["tg_name"], "", c) for m, c in zip(members, counts) if c),
         key=lambda r: r[2],
         reverse=True,
     )
