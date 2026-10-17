@@ -109,7 +109,7 @@ async def cmd_help(message: Message) -> None:
         "• <code>/loved</code> — любимые треки\n"
         "• <code>/roulette</code> — случайный альбом из вашего топа\n\n"
         "<b>В групповом чате:</b>\n"
-        "• <code>/leaders [дней]</code> — лидеры группы по скробблам\n"
+        "• <code>/leaders [дней]</code> — лидеры группы по количеству прослушиваний\n"
         "• <code>/whoknows [артист]</code> — кто в группе слушает артиста больше всех\n"
         "• <code>/join</code> или <code>join</code> — подтвердить участие в группе\n"
         "• <code>/np</code> или <code>nowplaying</code> — сгенерировать коллаж треков группы"

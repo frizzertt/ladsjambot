@@ -94,7 +94,7 @@ async def cmd_stats(message: Message, command: CommandObject, db: Database, last
         await message.answer(API_ERROR)
         return
     if not scrobbles:
-        await message.answer(f"За последние {days} дн. скробблов нет 🤷")
+        await message.answer(f"За последние {days} дн. количество прослушиваний — 0 🤷")
         return
 
     data = st.build_stats(user["tg_name"], days, scrobbles, truncated)
@@ -159,11 +159,11 @@ async def cmd_leaders(message: Message, command: CommandObject, db: Database, la
         reverse=True,
     )
     if not rows:
-        await message.answer(f"За последние {days} дн. ни у кого нет скробблов 🤷")
+        await message.answer(f"За последние {days} дн. количество прослушиваний у всех участников — 0 🤷")
         return
     buf = await asyncio.to_thread(
         render_rows, "LEADERBOARD", f"{message.chat.title or 'группа'}  ·  {days} дн.", rows,
-        unit_note="скробблы", tag="leaderboard",
+        unit_note="количество прослушиваний", tag="leaderboard",
     )
     await _send_photo(message, buf, name="leaders.jpg")
 
@@ -339,7 +339,7 @@ async def cmd_vs(message: Message, command: CommandObject, db: Database, lastfm:
     a = st.build_stats(me["tg_name"], days, sa, ta)
     b = st.build_stats(other["tg_name"], days, sb, tb)
     metrics = [
-        ("скробблы", a.total, b.total),
+        ("количество прослушиваний", a.total, b.total),
         ("минут прослушивания", a.minutes, b.minutes),
         ("уникальных артистов", a.unique_artists, b.unique_artists),
         ("уникальных треков", a.unique_tracks, b.unique_tracks),

@@ -79,7 +79,7 @@ async def main() -> None:
                 BotCommand(command="roulette", description="Случайный альбом из моего топа"),
                 BotCommand(command="recent", description="Последние треки"),
                 BotCommand(command="loved", description="Любимые треки"),
-                BotCommand(command="leaders", description="Лидеры группы по скробблам"),
+                BotCommand(command="leaders", description="Лидеры группы по количеству прослушиваний"),
                 BotCommand(command="compat", description="Музыкальная совместимость"),
                 BotCommand(command="whoknows", description="Кто в группе слушает артиста"),
                 BotCommand(command="join", description="Привязаться к группе"),

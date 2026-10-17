@@ -209,7 +209,10 @@ def _kpis(sh: Sheet, y: int, items: Sequence[Tuple[str, str]]) -> int:
         while size > 36 and sh.measure(value, size, fonts.BLACK) > cw - 56:
             size -= 4
         sh.text(x + 28, yy + 84, value, size, (12, 12, 16), fonts.BLACK)
-        sh.text(x + 28, yy + 148, label.upper(), 26, (12, 12, 16), fonts.EXTRABOLD)
+        label_size = 26
+        while label_size > 16 and sh.measure(label.upper(), label_size, fonts.EXTRABOLD) > cw - 56:
+            label_size -= 1
+        sh.text(x + 28, yy + 148, label.upper(), label_size, (12, 12, 16), fonts.EXTRABOLD)
     rows = math.ceil(len(items) / 2)
     return y + rows * (ch + gap)
 
@@ -285,7 +288,7 @@ def render_stats(st: ListeningStats, covers: Sequence[Optional[bytes]] = ()) -> 
     y = _kpis(
         sh, y + 20,
         [
-            (f"{st.total:,}".replace(",", " "), "скробблов"),
+            (f"{st.total:,}".replace(",", " "), "количество прослушиваний"),
             (_fmt_time(st.minutes), "время ≈"),
             (str(st.unique_artists), "артистов"),
             (f"{st.streak} дн.", "серия"),
