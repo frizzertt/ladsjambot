@@ -11,6 +11,7 @@ from aiogram.types import (
 )
 
 from bot.database import Database
+from bot.formatting import user_name_html
 from bot.lastfm import LastFMClient
 
 logger = logging.getLogger(__name__)
@@ -108,7 +109,7 @@ async def cmd_help(message: Message) -> None:
         "• <code>/loved</code> — любимые треки\n"
         "• <code>/roulette</code> — случайный альбом из вашего топа\n\n"
         "<b>В групповом чате:</b>\n"
-        "• <code>/leaders [дней]</code> — лидеры группы по скробблам\n"
+        "• <code>/leaders [дней]</code> — лидеры группы по количеству прослушиваний\n"
         "• <code>/whoknows [артист]</code> — кто в группе слушает артиста больше всех\n"
         "• <code>/join</code> или <code>join</code> — подтвердить участие в группе\n"
         "• <code>/np</code> или <code>nowplaying</code> — сгенерировать коллаж треков группы"
@@ -146,7 +147,7 @@ async def cb_check_auth(
     success_text = (
         f"🎉 <b>Авторизация успешна!</b>\n\n"
         f"Вы успешно вошли как <b>{html.escape(username)}</b> на Last.fm.\n"
-        f"Ваше имя в Telegram: <b>{html.escape(tg_name)}</b>.\n\n"
+        f"Ваше имя в Telegram: <b>{user_name_html(tg_name)}</b>.\n\n"
         "Теперь добавьте меня в группу (или напишите в ней сообщение), "
         "и по команде <code>/np</code> ваши треки будут появляться в коллаже!"
     )
@@ -211,7 +212,7 @@ async def cmd_reg(
 
     await status_msg.edit_text(
         f"✅ Профиль Last.fm <b>{html.escape(canonical_name)}</b> успешно привязан!\n\n"
-        f"Ваше отображаемое имя: <b>{html.escape(tg_name)}</b>.\n\n"
+        f"Ваше отображаемое имя: <b>{user_name_html(tg_name)}</b>.\n\n"
         "Теперь в любой группе с ботом вы будете участвовать в генерации коллажа "
         "по команде <code>/np</code> (или <code>nowplaying</code>).",
         parse_mode="HTML",
