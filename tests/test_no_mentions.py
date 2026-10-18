@@ -62,13 +62,14 @@ class NoMentionsTests(unittest.IsolatedAsyncioTestCase):
             await cmd_now_playing(self.message, self.db, self.lastfm)
         caption = self.message.answer_photo.call_args.kwargs["caption"]
         self.assert_no_mentions(caption)
-        self.assertIn("<b>alice</b>: Artist — Track", caption)
+        self.assertIn("<b>alice</b>: Artist — Track <a href=", caption)
+        self.assertIn('>(послушать)</a>', caption)
         self.assertIn("Не слушают: Bob &amp; bob", caption)
 
     async def test_np_long_caption_continuation(self):
         self.members[:] = [
             {"tg_id": i, "tg_name": f"@listener_{i}", "lastfm_user": f"fm_{i}"}
-            for i in range(30)
+            for i in range(60)
         ]
         self.lastfm.fetch_all_now_playing.return_value = [
             TrackInfo(m["tg_id"], m["tg_name"], m["lastfm_user"], "Artist", "Track", None)

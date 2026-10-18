@@ -1,13 +1,13 @@
 import asyncio
-import html
 import logging
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.utils.formatting import Bold, Italic, Text, TextLink
 
 from bot.collage import build_collage
 from bot.database import Database
-from bot.formatting import user_name_html
+from bot.formatting import now_playing_html_chunks, spotify_search_url, user_name, user_name_html
 from bot.lastfm import LastFMClient
 
 logger = logging.getLogger(__name__)
@@ -132,20 +132,20 @@ async def cmd_now_playing(
         return
 
     # 4. Construct caption list: "Юзер: Артист — Трек"
-    header = "🎧 <b>Сейчас слушают:</b>\n\n"
-    lines = []
+    parts = [Text("🎧 ", Bold("Сейчас слушают:"), "\n\n")]
     for item in active_tracks:
-        user_display = user_name_html(item.tg_name)
-        artist_display = html.escape(item.artist)
-        track_display = html.escape(item.track)
-        lines.append(f"<b>{user_display}</b>: {artist_display} — {track_display}")
-
-    full_text = header + "\n".join(lines)
+        if len(parts) > 1:
+            parts.append(Text("\n"))
+        parts.append(Text(
+            Bold(user_name(item.tg_name)), ": ", item.artist, " — ", item.track, " ",
+            TextLink("(послушать)", url=spotify_search_url(item.artist, item.track)),
+        ))
 
     active_ids = {item.tg_id for item in active_tracks}
-    idle = [user_name_html(m["tg_name"]) for m in members if m["tg_id"] not in active_ids]
+    idle = [user_name(m["tg_name"]) for m in members if m["tg_id"] not in active_ids]
     if idle:
-        full_text += "\n\n<i>Не слушают: " + ", ".join(idle) + "</i>"
+        parts.append(Text("\n\n", Italic("Не слушают: " + ", ".join(idle))))
+    chunks = now_playing_html_chunks(Text(*parts))
 
     # 5. Send photo collage to group
     photo_file = BufferedInputFile(
@@ -153,29 +153,10 @@ async def cmd_now_playing(
         filename="nowplaying_collage.jpg",
     )
 
-    # Telegram caption character limit is 1024 characters
-    if len(full_text) <= 1024:
-        await message.answer_photo(
-            photo=photo_file,
-            caption=full_text,
-            parse_mode="HTML",
-        )
-    else:
-        # Split caption if it exceeds 1024 characters
-        first_chunk = full_text[:1000]
-        # Find clean newline boundary
-        last_newline = first_chunk.rfind("\n")
-        if last_newline != -1:
-            caption_part = first_chunk[:last_newline]
-            remainder = full_text[last_newline + 1 :]
-        else:
-            caption_part = first_chunk
-            remainder = full_text[1000:]
-
-        await message.answer_photo(
-            photo=photo_file,
-            caption=caption_part,
-            parse_mode="HTML",
-        )
-        if remainder:
-            await message.answer(remainder, parse_mode="HTML")
+    await message.answer_photo(
+        photo=photo_file,
+        caption=chunks[0],
+        parse_mode="HTML",
+    )
+    for chunk in chunks[1:]:
+        await message.answer(chunk, parse_mode="HTML", disable_web_page_preview=True)
