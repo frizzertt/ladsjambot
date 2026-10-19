@@ -2,8 +2,10 @@ import asyncio
 import hashlib
 import logging
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+from uuid import uuid4
 import aiohttp
 
 from bot.config import config
@@ -17,6 +19,7 @@ RECENT_TRACKS_RETRIES = 2
 TRANSIENT_LASTFM_ERRORS = (8, 11, 16, "8", "11", "16")
 COVER_CACHE_SIZE = 64
 RECENT_SCROBBLE_WINDOW = 240  # seconds a just-scrobbled track still counts as playing
+_np_request_id: ContextVar[Optional[str]] = ContextVar("np_request_id", default=None)
 
 
 @dataclass
@@ -205,6 +208,27 @@ class LastFMClient:
         tg_name = user_entry["tg_name"]
         lastfm_user = user_entry["lastfm_user"]
 
+        request_id = _np_request_id.get() or uuid4().hex[:12]
+        started = attempt_started = time.perf_counter()
+        network_started = None
+        http_status = lastfm_error = nowplaying = timestamp = age = None
+        attempt = 0
+
+        def diagnostic(event: str, reason: str, exception: Optional[Exception] = None) -> None:
+            # Never log exception text: aiohttp exceptions can contain signed request URLs.
+            now = time.perf_counter()
+            network_start = network_started if network_started is not None else now
+            logger.info(
+                "np_%s request_id=%s user=%r attempt=%d http_status=%s lastfm_error=%s "
+                "elapsed_ms=%.1f queue_ms=%.1f total_ms=%.1f nowplaying=%r "
+                "timestamp=%s age_s=%s reason=%s exception=%s",
+                event, request_id, lastfm_user, attempt + 1, http_status, lastfm_error,
+                (now - network_start) * 1000, (network_start - attempt_started) * 1000,
+                (now - started) * 1000, nowplaying, timestamp,
+                round(age, 3) if age is not None else None, reason,
+                type(exception).__name__ if exception is not None else None,
+            )
+
         params = {
             "method": "user.getrecenttracks",
             "user": lastfm_user,
@@ -219,40 +243,54 @@ class LastFMClient:
         # "nobody is listening", so retry a few times before giving up.
         data = None
         for attempt in range(RECENT_TRACKS_RETRIES + 1):
+            attempt_started = time.perf_counter()
+            network_started = None
+            http_status = lastfm_error = None
+            attempt_reason = "request_exception"
             try:
                 async with self.semaphore:
+                    network_started = time.perf_counter()
                     async with self.session.get(
                         self.api_url, params=params, headers=headers, timeout=timeout
                     ) as resp:
+                        http_status = resp.status
                         if resp.status == 200:
                             candidate = await resp.json(content_type=None)
                             err = candidate.get("error") if isinstance(candidate, dict) else None
+                            # Only numeric error codes are diagnostic data, never the provider's message.
+                            if isinstance(err, int):
+                                lastfm_error = err
+                            elif isinstance(err, str) and err.isascii() and err.isdecimal() and len(err) <= 6:
+                                lastfm_error = err
+                            elif err is not None:
+                                lastfm_error = "<invalid code>"
+                            attempt_reason = "lastfm_transient_error" if err in TRANSIENT_LASTFM_ERRORS else "response_received"
                             if err not in TRANSIENT_LASTFM_ERRORS:
                                 data = candidate
+                                diagnostic("attempt", attempt_reason)
                                 break
                         elif resp.status < 500 and resp.status != 429:
-                            logger.warning(
-                                "Last.fm getrecenttracks returned HTTP %s for user %s",
-                                resp.status,
-                                lastfm_user,
-                            )
+                            diagnostic("decision", "http_nonretryable")
                             return None
+                        else:
+                            attempt_reason = "http_retryable"
+                diagnostic("attempt", attempt_reason)
             except Exception as e:
-                logger.warning(
-                    "Attempt %d fetching recent tracks for %s failed: %r",
-                    attempt + 1,
-                    lastfm_user,
-                    e,
-                )
+                diagnostic("attempt", "request_exception", e)
             if attempt < RECENT_TRACKS_RETRIES:
                 await asyncio.sleep(0.5 * (attempt + 1))
 
         if data is None:
+            diagnostic("decision", "empty_json_response" if attempt_reason == "response_received" else "retries_exhausted")
             return None
 
         # Parse recenttracks payload
+        if not isinstance(data, dict):
+            # Preserve the existing parser's exception; only explain it before gather excludes this user.
+            diagnostic("decision", "payload_not_object")
         recenttracks = data.get("recenttracks")
         if not isinstance(recenttracks, dict):
+            diagnostic("decision", "lastfm_error" if isinstance(data, dict) and "error" in data else "recenttracks_missing_or_invalid")
             return None
 
         raw_track = recenttracks.get("track")
@@ -263,13 +301,16 @@ class LastFMClient:
         elif isinstance(raw_track, list):
             tracks = raw_track
         else:
+            diagnostic("decision", "tracks_missing_or_invalid")
             return None
 
         if not tracks:
+            diagnostic("decision", "tracks_empty")
             return None
 
         first_track = tracks[0]
         if not isinstance(first_track, dict):
+            diagnostic("decision", "first_track_invalid")
             return None
 
         # Track is active if flagged nowplaying, or if it was scrobbled moments ago.
@@ -277,15 +318,28 @@ class LastFMClient:
         # (and some scrobblers never send it), so a freshly scrobbled track is
         # almost certainly still playing.
         attr = first_track.get("@attr")
+        raw_nowplaying = attr.get("nowplaying") if isinstance(attr, dict) else None
+        nowplaying = raw_nowplaying if raw_nowplaying in (None, True, False, "true", "false", "True", "False", "1", "0") else "<unexpected value>"
         is_now = isinstance(attr, dict) and attr.get("nowplaying") == "true"
         if not is_now:
             date = first_track.get("date")
             try:
-                age = time.time() - int(date["uts"])
-            except (TypeError, KeyError, ValueError):
+                timestamp = int(date["uts"])
+                age = time.time() - timestamp
+            except (TypeError, KeyError, ValueError) as e:
+                diagnostic("decision", "timestamp_missing_or_invalid", e)
                 return None
             if age > RECENT_SCROBBLE_WINDOW:
+                diagnostic("decision", "outside_activity_window")
                 return None
+        else:
+            # Observation only: @attr.nowplaying remains sufficient even without a valid date.
+            try:
+                timestamp = int(first_track["date"]["uts"])
+                age = time.time() - timestamp
+            except (TypeError, KeyError, ValueError, OverflowError):
+                pass
+        diagnostic("decision", "active_nowplaying" if is_now else "active_recent_scrobble")
 
         # Extract artist name
         artist_raw = first_track.get("artist")
@@ -348,17 +402,32 @@ class LastFMClient:
         if not members:
             return []
 
-        tasks = [self.get_user_now_playing(member) for member in members]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        request_id = uuid4().hex[:12]
+        started = time.perf_counter()
+        logger.info("np_batch_start request_id=%s members=%d", request_id, len(members))
+        context = _np_request_id.set(request_id)
+        try:
+            tasks = [self.get_user_now_playing(member) for member in members]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            _np_request_id.reset(context)
 
         active_tracks: List[TrackInfo] = []
-        for res in results:
+        for member, res in zip(members, results):
             if isinstance(res, Exception):
-                logger.warning("Gather task encountered exception: %s", res)
+                logger.warning(
+                    "np_decision request_id=%s user=%r reason=member_exception exception=%s",
+                    request_id, member.get("lastfm_user"), type(res).__name__,
+                )
                 continue
             if res is not None:
                 active_tracks.append(res)
 
+        logger.info(
+            "np_batch_end request_id=%s members=%d active=%d excluded=%d elapsed_ms=%.1f",
+            request_id, len(members), len(active_tracks), len(members) - len(active_tracks),
+            (time.perf_counter() - started) * 1000,
+        )
         return active_tracks
 
     def calculate_api_sig(self, params: Dict[str, str]) -> str:
