@@ -201,6 +201,75 @@ class LastFMMockTestSuite(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(username)
         self.assertIn("не подтвердили", error)
 
+    async def test_auth_error_codes_are_not_all_expired_tokens(self):
+        self.client.shared_secret = "test-secret"
+        response = AsyncMock(status=200)
+        self.session.get.return_value.__aenter__.return_value = response
+        for code in (4, 15, "15", 14, "14", 8, 11, 13, 26, 29):
+            with self.subTest(code=code):
+                response.json.return_value = {"error": code, "message": "provider message"}
+                success, username, error = await self.client.get_session_from_token("fake-token")
+                self.assertFalse(success)
+                self.assertIsNone(username)
+                if int(code) in (4, 15):
+                    self.assertIn("/auth", error)
+                    self.assertIn("уже использована", error)
+                elif int(code) == 14:
+                    self.assertIn("не подтвердили", error)
+                    self.assertIn("Подтвердить привязку", error)
+                    self.assertNotIn("истекла", error)
+                else:
+                    self.assertIn(f"код {code}", error)
+                    self.assertNotIn("истекла", error)
+
+    async def test_auth_http_outage_is_not_an_expired_token(self):
+        self.client.shared_secret = "test-secret"
+        for status in (429, 503):
+            with self.subTest(status=status):
+                response = AsyncMock(status=status)
+                self.session.get.return_value.__aenter__.return_value = response
+                success, username, error = await self.client.get_session_from_token("fake-token")
+                self.assertFalse(success)
+                self.assertIsNone(username)
+                self.assertIn("временно недоступен", error)
+                self.assertNotIn("истекла", error)
+                response.json.assert_not_awaited()
+
+    async def test_invalid_auth_responses_do_not_register_a_user(self):
+        self.client.shared_secret = "test-secret"
+        response = AsyncMock(status=200)
+        self.session.get.return_value.__aenter__.return_value = response
+        for data in (None, [], {}, {"session": {"name": ""}}, {"session": {"name": 12}},
+                     {"error": "unknown"}):
+            with self.subTest(data=data):
+                response.json.return_value = data
+                success, username, error = await self.client.get_session_from_token("fake-token")
+                self.assertFalse(success)
+                self.assertIsNone(username)
+                self.assertIsNotNone(error)
+
+    async def test_auth_network_error_does_not_expose_request_secrets(self):
+        self.client.shared_secret = "test-secret"
+        self.session.get.side_effect = asyncio.TimeoutError("token=fake-token&api_key=mock_api_key")
+        for method in (self.client.get_session_from_token, self.client.get_auth_token):
+            with self.subTest(method=method.__name__), self.assertLogs("bot.lastfm", level="ERROR") as logs:
+                result = await method("fake-token") if method == self.client.get_session_from_token else await method()
+            output = " ".join(logs.output) + str(result)
+            self.assertNotIn("fake-token", output)
+            self.assertNotIn("mock_api_key", output)
+            self.assertNotIn("test-secret", output)
+            if isinstance(result, tuple):
+                self.assertIn("Сетевая ошибка", result[2])
+
+    async def test_invalid_auth_token_response_is_not_logged(self):
+        self.client.shared_secret = "test-secret"
+        response = AsyncMock(status=200)
+        response.json.return_value = {"error": 13, "message": "token=fake-token"}
+        self.session.get.return_value.__aenter__.return_value = response
+        with self.assertLogs("bot.lastfm", level="ERROR") as logs:
+            self.assertIsNone(await self.client.get_auth_token())
+        self.assertNotIn("fake-token", " ".join(logs.output))
+
 
 if __name__ == "__main__":
     unittest.main()
