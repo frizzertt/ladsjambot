@@ -1,6 +1,7 @@
 import html
 import logging
 from typing import Optional, Union
+from urllib.parse import quote
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (
@@ -26,6 +27,7 @@ async def _render_auth_prompt(
     target: Union[Message, CallbackQuery],
     lastfm: LastFMClient,
     is_edit: bool = False,
+    replacing: bool = False,
 ) -> None:
     """Send or edit an authorization prompt with web login buttons if available."""
     token: Optional[str] = None
@@ -44,7 +46,7 @@ async def _render_auth_prompt(
                 ],
                 [
                     InlineKeyboardButton(
-                        text="✅ Проверить авторизацию",
+                        text="✅ Подтвердить привязку",
                         callback_data=f"check_auth:{token}",
                     )
                 ],
@@ -55,7 +57,7 @@ async def _render_auth_prompt(
             "Чтобы ваши треки попадали в общий коллаж группы, авторизуйтесь через Last.fm:\n\n"
             "1️⃣ Нажмите <b>«🔗 Войти через Last.fm»</b> (откроется официальная страница Last.fm).\n"
             "2️⃣ Нажмите кнопку <b>«Yes, allow access»</b> (разрешить доступ приложению).\n"
-            "3️⃣ Вернитесь в этот чат и нажмите <b>«✅ Проверить авторизацию»</b>.\n\n"
+            "3️⃣ Вернитесь в этот чат и нажмите <b>«✅ Подтвердить привязку»</b>.\n\n"
             "<i>(Также доступна ручная привязка по нику: <code>/reg &lt;ник&gt;</code>)</i>"
         )
     else:
@@ -68,6 +70,9 @@ async def _render_auth_prompt(
             "<i>Пример:</i> <code>/reg username</code>\n\n"
             "<i>💡 Подсказка: для включения входа по кнопке через сайт укажите <code>LASTFM_SHARED_SECRET</code> в .env</i>"
         )
+
+    if replacing:
+        text = "🔄 <b>Смена аккаунта Last.fm</b>\nСтарая привязка сохранится до успешного подтверждения новой.\n\n" + text
 
     if is_edit:
         msg = target if isinstance(target, Message) else target.message
@@ -83,9 +88,33 @@ async def _render_auth_prompt(
 
 @router.message(Command("start"))
 @router.message(Command("auth"))
-async def cmd_start_or_auth(message: Message, lastfm: LastFMClient) -> None:
+async def cmd_start_or_auth(message: Message, lastfm: LastFMClient, db: Database) -> None:
     """Handle /start and /auth commands."""
+    user = await db.get_user(message.from_user.id) if message.from_user else None
+    if user:
+        username = user["lastfm_user"]
+        profile_url = "https://www.last.fm/user/" + quote(username, safe="")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Сменить аккаунт", callback_data="change_auth")
+        ]])
+        await message.answer(
+            f"Вы уже привязаны к Last.fm: <b>{html.escape(username)}</b>\n"
+            f'<a href="{html.escape(profile_url, quote=True)}">Открыть профиль Last.fm</a>',
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+        return
     await _render_auth_prompt(message, lastfm)
+
+
+@router.callback_query(F.data == "change_auth")
+async def cb_change_auth(query: CallbackQuery, lastfm: LastFMClient) -> None:
+    """Start a new authorization without changing the existing registration."""
+    if not isinstance(query.message, Message):
+        await query.answer("Сообщение недоступно. Вызовите /auth ещё раз.", show_alert=True)
+        return
+    await _render_auth_prompt(query, lastfm, replacing=True)
+    await query.answer()
 
 
 @router.message(Command("help"))
@@ -118,20 +147,24 @@ async def cmd_help(message: Message) -> None:
 
 
 @router.callback_query(F.data.startswith("check_auth:"))
+@router.callback_query(F.data == "check_auth")
 async def cb_check_auth(
     query: CallbackQuery,
     db: Database,
     lastfm: LastFMClient,
 ) -> None:
     """Check whether the user has authorized the token on Last.fm website."""
-    token = query.data.split(":", 1)[1]
+    prefix, separator, token = (query.data or "").partition(":")
+    if prefix != "check_auth" or not separator or not token.strip():
+        await query.answer("Ссылка привязки недействительна. Вызовите /auth ещё раз.", show_alert=True)
+        return
     success, username, error_message = await lastfm.get_session_from_token(token)
 
     if not success or not username:
-        await query.answer(
-            error_message or "Авторизация ещё не подтверждена на сайте.",
-            show_alert=True,
-        )
+        text = error_message or "Не удалось подтвердить новую привязку. Попробуйте ещё раз."
+        if await db.get_user(query.from_user.id):
+            text += "\nДействующая привязка сохранена."
+        await query.answer(text, show_alert=True)
         return
 
     # User successfully authorized! Save to database
@@ -152,7 +185,7 @@ async def cb_check_auth(
         "и по команде <code>/np</code> ваши треки будут появляться в коллаже!"
     )
 
-    if query.message:
+    if isinstance(query.message, Message):
         await query.message.edit_text(success_text, parse_mode="HTML")
     await query.answer("Успешно привязано!", show_alert=False)
 

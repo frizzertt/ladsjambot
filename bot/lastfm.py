@@ -400,10 +400,10 @@ class LastFMClient:
                     data = await resp.json(content_type=None)
                     if isinstance(data, dict) and "token" in data:
                         return data["token"]
-                    logger.error("Invalid response from auth.getToken: %s", data)
+                    logger.error("Invalid response from auth.getToken")
                     return None
         except Exception as e:
-            logger.error("Exception in auth.getToken: %s", e)
+            logger.error("Exception in auth.getToken (%s)", type(e).__name__)
             return None
 
     def get_auth_url(self, token: str) -> str:
@@ -435,31 +435,45 @@ class LastFMClient:
                 async with self.session.get(
                     self.api_url, params=params, headers=headers, timeout=timeout
                 ) as resp:
+                    if resp.status >= 500 or resp.status == 429:
+                        return False, None, "Last.fm временно недоступен. Попробуйте подтвердить привязку позже."
                     data = await resp.json(content_type=None)
                     if not isinstance(data, dict):
                         return False, None, "Некорректный ответ от Last.fm"
 
                     if "error" in data:
-                        code = data.get("error")
+                        try:
+                            code = int(data["error"])
+                        except (TypeError, ValueError):
+                            return False, None, "Некорректный ответ от Last.fm. Попробуйте ещё раз."
                         if code == 14:
                             return (
                                 False,
                                 None,
                                 "Вы ещё не подтвердили доступ на сайте Last.fm.\n"
-                                "Нажмите кнопку «🔗 Войти через Last.fm» выше, разрешите доступ в открывшемся окне, "
-                                "а затем нажмите «✅ Проверить авторизацию».",
+                                "Нажмите «Войти через Last.fm», разрешите доступ, затем нажмите «Подтвердить привязку».",
+                            )
+                        if code in (4, 15):
+                            return (
+                                False, None,
+                                "Ссылка привязки недействительна, истекла или уже использована. Вызовите /auth ещё раз.",
                             )
                         return (
                             False,
                             None,
-                            f"Ошибка Last.fm ({code}): {data.get('message', 'Неизвестная ошибка')}",
+                            f"Ошибка Last.fm (код {code}). Попробуйте позже или вызовите /auth ещё раз.",
                         )
 
+                    if resp.status != 200:
+                        return False, None, f"Ошибка HTTP {resp.status} от Last.fm. Попробуйте позже."
                     session = data.get("session")
-                    if isinstance(session, dict) and "name" in session:
-                        return True, session["name"], None
+                    username = session.get("name") if isinstance(session, dict) else None
+                    if isinstance(username, str) and username.strip():
+                        return True, username, None
 
                     return False, None, "Не удалось получить имя пользователя из сессии"
+        except (ValueError, aiohttp.ContentTypeError):
+            return False, None, "Некорректный ответ от Last.fm. Попробуйте ещё раз."
         except Exception as e:
-            logger.error("Exception in auth.getSession: %s", e)
-            return False, None, f"Сетевая ошибка: {e}"
+            logger.error("Exception in auth.getSession (%s)", type(e).__name__)
+            return False, None, "Сетевая ошибка при обращении к Last.fm. Попробуйте подтвердить привязку позже."
