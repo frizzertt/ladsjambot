@@ -61,28 +61,6 @@ async def avatar(message, user_id):
         return None
 
 
-async def album_cover(lastfm, info):
-    try:
-        images = ((info or {}).get('track') or {}).get('album', {}).get('image', [])
-        for image in reversed(images if isinstance(images, list) else []):
-            url = image.get('#text', '') if isinstance(image, dict) else ''
-            parsed = urlparse(url)
-            if (parsed.scheme != 'https' or parsed.hostname not in
-                    {'lastfm.freetls.fastly.net', 'lastfm-img2.akamaized.net'} or
-                    parsed.username or parsed.port not in (None, 443) or PLACEHOLDER_HASH in url):
-                continue
-            async with lastfm.session.get(url, timeout=aiohttp.ClientTimeout(total=12), allow_redirects=False) as response:
-                if response.status != 200 or (response.content_length and response.content_length > MAX_IMAGE):
-                    continue
-                data = bytearray()
-                async for chunk in response.content.iter_chunked(65536):
-                    data.extend(chunk)
-                    if len(data) > MAX_IMAGE:
-                        return None
-                return bytes(data) or None
-    except (aiohttp.ClientError, TimeoutError, ValueError, TypeError, AttributeError):
-        return None
-    return None
 
 
 class GroupStatsCommand(Filter):
@@ -181,7 +159,7 @@ async def handle_groupstats(message: Message, groupstats_args: list[str], db: Da
                                     duration = float((info or {}).get('track', {}).get('duration', 0)) / 1000 or None
                                 except (TypeError, ValueError, AttributeError):
                                     duration = None
-                                avatar_bytes, cover_bytes = await asyncio.gather(avatar(message, member['tg_id']), album_cover(lastfm, info))
+                                avatar_bytes, cover_bytes = await asyncio.gather(avatar(message, member['tg_id']), lastfm.cover(artist, track))
                                 audio = await resolve_audio(artist, track, directory / 'download', duration)
                                 start, pcm = await analyse_audio(audio.path, directory, canvas_service.analyser,
                                                                  canvas_service.ffmpeg, 10, preview=getattr(audio, 'preview', False))

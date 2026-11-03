@@ -153,8 +153,16 @@ class LastFMClient:
             try:
                 async with self.session.get(url, headers=headers, timeout=timeout) as resp:
                     if resp.status == 200:
-                        data = await resp.read()
-                        if len(data) > 0:
+                        from bot.covers import MAX_IMAGE, normalized_image
+                        if (resp.content_length or 0) > MAX_IMAGE:
+                            return None
+                        raw = bytearray()
+                        async for chunk in resp.content.iter_chunked(65536):
+                            raw.extend(chunk)
+                            if len(raw) > MAX_IMAGE:
+                                return None
+                        data = normalized_image(raw)
+                        if data:
                             if len(self._cover_cache) >= COVER_CACHE_SIZE:
                                 self._cover_cache.pop(next(iter(self._cover_cache)))
                             self._cover_cache[url] = data
@@ -170,6 +178,18 @@ class LastFMClient:
                 await asyncio.sleep(0.4 * (attempt + 1))
 
         return None
+
+    async def cover(self, artist, title, url=None, *, track=True):
+        """Last.fm artwork first, then identity-matched SoundCloud artwork."""
+        from bot.covers import soundcloud_cover
+        image = await self._download_cover(url)
+        if image is None and track:
+            fallback = await self._fetch_cover_via_track_info(artist, title)
+            if fallback and fallback != url:
+                image = await self._download_cover(fallback)
+        if image is None:
+            image = await soundcloud_cover(self.session, artist, title)
+        return image
 
     async def _fetch_cover_via_track_info(self, artist: str, track: str) -> Optional[str]:
         """Fallback: ask track.getInfo for the album image when recenttracks has none."""
@@ -371,16 +391,7 @@ class LastFMClient:
                     image_url = candidate_url
                     break
 
-        # Download cover image if available
-        cover_bytes = await self._download_cover(image_url)
-
-        # Fallback: no image in recenttracks or download failed -> try track.getInfo
-        if cover_bytes is None:
-            fallback_url = await self._fetch_cover_via_track_info(
-                artist_name.strip(), track_name.strip()
-            )
-            if fallback_url and fallback_url != image_url:
-                cover_bytes = await self._download_cover(fallback_url)
+        cover_bytes = await self.cover(artist_name.strip(), track_name.strip(), image_url)
 
         return TrackInfo(
             tg_id=tg_id,

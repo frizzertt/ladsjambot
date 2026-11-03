@@ -66,8 +66,7 @@ async def _hero_covers(lastfm: LastFMClient, user: str, period: str = "1month", 
     """Album covers of a user's top albums for the poster hero (best effort, never raises)."""
     try:
         albums = await st.fetch_top(lastfm, user, "albums", period, n)
-        urls = [a["cover"] for a in (albums or []) if a.get("cover")]
-        got = await asyncio.gather(*[lastfm._download_cover(u) for u in urls])
+        got = await asyncio.gather(*[lastfm.cover(a["artist"], a["name"], a.get("cover"), track=False) for a in (albums or [])])
         return [c for c in got if c]
     except Exception:
         return []
@@ -126,7 +125,7 @@ async def cmd_top(message: Message, command: CommandObject, db: Database, lastfm
 
     subtitle = f"{user['tg_name']}  ·  {period_label}"
     if kind == "albums":
-        covers = await asyncio.gather(*[lastfm._download_cover(i["cover"]) for i in items])
+        covers = await asyncio.gather(*[lastfm.cover(i["artist"], i["name"], i.get("cover"), track=False) for i in items])
         buf = await asyncio.to_thread(render_album_grid, KIND_TITLES[kind], subtitle, items, covers,
                                      await for_chat(db, message.chat.id))
     else:
@@ -505,7 +504,7 @@ async def cmd_roulette(message: Message, db: Database, lastfm: LastFMClient) -> 
         await message.answer(API_ERROR if albums is None else "Пока нет альбомов 🤷")
         return
     pick = random.choice(albums)
-    cover = await lastfm._download_cover(pick["cover"])
+    cover = await lastfm.cover(pick["artist"], pick["name"], pick.get("cover"), track=False)
     caption = (
         f"🎲 <b>{html.escape(pick['name'])}</b>\n{html.escape(pick['artist'])}\n"
         f"Вы слушали его {pick['plays']} раз(а) — самое время вернуться."

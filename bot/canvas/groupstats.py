@@ -1,5 +1,7 @@
 """One listener's animated ten-second group statistics scene."""
 import colorsys
+import hashlib
+from pathlib import Path
 import io
 import math
 import numpy as np
@@ -24,6 +26,21 @@ class GroupStatsFrames:
         self.side = self._s(340)
         self.top = self._s(60)
         avatar = self._image(avatar_bytes)
+        if avatar is None:
+            from bot.collage import _goofy_files
+            files = _goofy_files()
+            if files:
+                offset = int.from_bytes(hashlib.sha256(str(username).encode()).digest()[:4], 'big') % len(files)
+                for path in files[offset:] + files[:offset]:
+                    try:
+                        asset = Path(path)
+                        if asset.stat().st_size > 5 * 1024 * 1024:
+                            continue
+                        avatar = self._image(asset.read_bytes())
+                    except OSError:
+                        continue
+                    if avatar is not None:
+                        break
         self.accent = self._accent(avatar, theme)
         if avatar is None:
             avatar = Image.new('RGB', (self.side, self.side), theme.card)
