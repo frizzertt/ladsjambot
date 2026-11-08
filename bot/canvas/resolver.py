@@ -17,6 +17,12 @@ from .process import MediaError, run
 
 VERSIONS={'remix','live','cover','karaoke','instrumental','slowed','sped','nightcore','reverb','acoustic','concert','tribute','acapella','acappella','акапелла'}
 NOISE={'official','audio','video','lyrics','lyric','hd','hq','visualizer','mv','music','topic'}
+# Explicit recording choices take precedence over search, including approximate matches.
+# Keep the UNCLE spelling as an alias for this track only.
+SOURCE_OVERRIDES={
+    ('unkle','bloodstain'): 'https://www.youtube.com/watch?v=cquDXXXZsEo',
+    ('uncle','bloodstain'): 'https://www.youtube.com/watch?v=cquDXXXZsEo',
+}
 
 
 def words(value):
@@ -240,6 +246,13 @@ async def resolve_audio(artist, title, directory: Path, duration=None):
             result=await download(url,source,name)
             if result: return result
         return None
+
+    override=SOURCE_OVERRIDES.get((' '.join(words(artist)),' '.join(words(title))))
+    if override:
+        found=await download(override,'YouTube',f'{artist} - {title}')
+        if found: return found
+        # Do not silently substitute another recording if the chosen video is unavailable.
+        raise MediaError('Pinned audio source is unavailable')
 
     providers=(('ytsearch5:',{'youtube.com','www.youtube.com','music.youtube.com','youtu.be'},'YouTube'),
                ('scsearch5:',{'soundcloud.com','www.soundcloud.com'},'SoundCloud'))

@@ -37,6 +37,46 @@ class FallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.approximate)
         self.assertEqual(calls,['search-yt','download-'+url])
 
+    async def test_bloodstain_uses_pinned_video_without_search(self):
+        url='https://www.youtube.com/watch?v=cquDXXXZsEo'
+        for artist,title in (('UNKLE','Bloodstain'),('UNCLE','Bloodstain'),('  Unkle  ',' BLOODSTAIN ')):
+            with self.subTest(artist=artist,title=title), tempfile.TemporaryDirectory() as tmp:
+                async def run(args, **kwargs):
+                    self.assertNotIn('--dump-single-json',args)
+                    self.assertEqual(args[-1],url)
+                    Path(args[args.index('-o')+1].replace('%(ext)s','mp3')).write_bytes(b'audio')
+                    return b''
+                with patch('bot.canvas.resolver.run',side_effect=run) as process:
+                    result=await resolve_audio(artist,title,Path(tmp),300)
+                process.assert_awaited_once()
+                self.assertEqual((result.url,result.source),(url,'YouTube'))
+                self.assertFalse(result.approximate)
+                self.assertFalse(result.preview)
+                self.assertEqual(result.path.read_bytes(),b'audio')
+
+    async def test_unavailable_pinned_video_does_not_substitute_another_track(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            async def run(args, **kwargs):
+                self.assertNotIn('--dump-single-json',args)
+                Path(args[args.index('-o')+1].replace('%(ext)s','mp3')).write_bytes(b'partial')
+                raise MediaError('unavailable')
+            with patch('bot.canvas.resolver.run',side_effect=run) as process:
+                with self.assertRaisesRegex(MediaError,'Pinned audio source is unavailable'):
+                    await resolve_audio('UNKLE','Bloodstain',Path(tmp))
+            process.assert_awaited_once()
+            self.assertEqual(list(Path(tmp).iterdir()),[])
+
+    async def test_override_does_not_capture_other_recordings(self):
+        for artist,title in (('UNKLE','Bloodstain (Remix)'),('Other Artist','Bloodstain'),('UNKLE','Other Song')):
+            with self.subTest(artist=artist,title=title), tempfile.TemporaryDirectory() as tmp:
+                async def run(args, **kwargs):
+                    self.assertIn('--dump-single-json',args)
+                    return b'{"entries": []}'
+                with patch('bot.canvas.resolver.run',side_effect=run) as process:
+                    with self.assertRaisesRegex(MediaError,'No confident downloadable match'):
+                        await resolve_audio(artist,title,Path(tmp))
+                self.assertEqual(process.await_count,2)
+
     async def test_exact_soundcloud_beats_approximate_youtube(self):
         yt='https://youtube.com/watch?v=abcdefghijk'; sc='https://soundcloud.com/alice/night-drive'
         result,calls,_=await self.run_case([self.entry('Alice - Night Drive remix',yt)], [self.entry('Alice - Night Drive',sc)])
