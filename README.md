@@ -243,3 +243,5 @@ python3 main.py
 ### Groupstats animation
 
 Groupstats uses the approved dark poster design: avatar-derived reactive glow, a vertical card flip, gentle cover zoom and sparse audio-onset pulses, large track titles, play-count reveal, participant numbering and a scene progress bar. The next prepared participant enters while the current card exits. Audio remains sequential, ten seconds per participant. Prepared media is capped at 256 MiB on disk and removed after rendering; only the current and next scenes are retained in memory. Missing audio and resource-limit skips are reported.
+
+Missing artwork falls back from Last.fm to identity-matched SoundCloud artwork for now-playing/canvas, groupstats, and statistics images. Downloads are bounded to 5 MiB, validated and resized; a 32-entry in-memory cache expires successes after one hour and misses after two minutes. Groupstats uses bundled `assets/goofy` images when a Telegram avatar is unavailable or invalid; initials remain only if no valid bundled image exists.
